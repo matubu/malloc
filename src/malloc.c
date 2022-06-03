@@ -1,8 +1,12 @@
 #include "malloc.h"
+#include <stdio.h>
 
 typedef struct chunk_header_s {
 	size_t			size;
 }	chunk_header_t;
+
+/* Get the rounded up multiple of the page size */
+#define PAGE_SIZE_MULTIPLE(size, pagesize) ((size + pagesize - 1) & ~(pagesize - 1))
 
 void	free(void *ptr)
 {
@@ -11,6 +15,7 @@ void	free(void *ptr)
 
 	/* Move to allocation start */
 	ptr -= sizeof(chunk_header_t);
+	/* Get allocation size */
 	size_t	size = ((chunk_header_t *)ptr)->size;
 	munmap(ptr, size);
 }
@@ -34,19 +39,23 @@ void	*realloc(void *ptr, size_t newdatasize)
 		return (malloc(newdatasize));
 
 	/* Add the header size */
-	size_t newsize = newdatasize + sizeof(chunk_header_t);
+	size_t	newsize = newdatasize + sizeof(chunk_header_t);
 
 	/* Get current size */
 	size_t	size = ((chunk_header_t *)ptr - 1)->size;
 
 	/* Check available space */
-	const int pagesize = getpagesize();
-	size_t	available = pagesize * ((size / pagesize) + !!(size % pagesize));
+	const int	pagesize = getpagesize();
+	size_t		available = PAGE_SIZE_MULTIPLE(size, pagesize);
 
 	if (available >= newsize)
 	{
-		/* Update used space */
-		((chunk_header_t *)ptr - 1)->size = newsize > size ? newsize : size;
+		/* Update used space to know how much to copy next time */
+		((chunk_header_t *)ptr - 1)->size = newsize;
+		/* Unmap the unused part */
+		size_t	newavailable = PAGE_SIZE_MULTIPLE(newsize, pagesize);
+		munmap(ptr - sizeof(chunk_header_t) + newavailable, available - newavailable);
+		/* Return original pointer */
 		return (ptr);
 	}
 
@@ -68,5 +77,4 @@ void	*realloc(void *ptr, size_t newdatasize)
 
 void	show_alloc_mem(void)
 {
-	
 }

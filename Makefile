@@ -9,7 +9,9 @@ Objs = $(addprefix bin/, $(Srcs:.c=.o))
 Header = malloc.h
 
 Incs = -I.
-Flag = -fsanitize=address -g -Wall -Wextra -Werror -O3 $(Incs)
+Flag = $(Incs)
+Flag += -Wall -Wextra -Werror
+Flag += -O3
 
 Red = \033[1;91m
 Green = \033[1;92m
@@ -20,11 +22,11 @@ all: $(Name)
 bin/%.o: src/%.c $(Header)
 	@echo "🔧 $(Green)Compiling$(Eoc) $(notdir $<)"
 	@mkdir -p bin
-	@gcc $(Flag) $< -o $@ -c
+	@gcc $(Flag) -fPIC $< -o $@ -c
 
 $(Name): $(Objs)
 	@echo "📦 $(Green)Archiving$(Eoc) $(FullName)"
-	@gcc $(Flag) -shared -o $(FullName) $^
+	@gcc $(Flag) $^ -shared -o $(FullName)
 	@echo "🔗 $(Green)Linking$(Eoc)   $(Name) -> $(FullName)"
 	@rm -rf $(Name)
 	@ln -s $(FullName) $(Name)
@@ -35,14 +37,14 @@ clean:
 
 fclean: clean
 	@echo "🗑  $(Red)Removing$(Eoc)  $(Name)"
-	@rm -rf $(Name) test
+	@rm -rf $(Name) $(FullName) test
 
 re: fclean all
 
 test: all
 	@echo "🎯 $(Green)Compiling$(Eoc) $@"
-	@gcc $(Flag) $(Name) -o $@ test.c
+	@gcc $(Flag) test.c -o $@ -L. -lft_malloc
 	@echo "🖥  $(Green)Launching$(Eoc) $@"
-	@./$@
+	@export LD_LIBRARY_PATH=. && ./$@
 
 .PHONY: all clean fclean re test

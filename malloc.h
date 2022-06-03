@@ -1,8 +1,8 @@
 #pragma once
 
 #include <sys/mman.h>
-#include <unistd.h>
 #include <sys/resource.h>
+#include <unistd.h>
 
 void	*malloc(size_t size);
 void	free(void *ptr);
