@@ -46,7 +46,7 @@ static inline int	lmub(uint64_t bytes)
 
 // show_alloc_mem(tiny) ✅
 // show_alloc_mem(small) ❌
-// show_alloc_mem(large) ❌
+// show_alloc_mem(large) ✅
 
 // Zones
 // total stack memory preallocated 74_304 bytes
@@ -74,17 +74,15 @@ uint64_t	small_used[4] = {0};
 // | containing size  |      |
 typedef struct chunk_header_s {
 	size_t			size;
-	/*
-		#if DEV
+	#if DEV
 		struct chunk_header_s	*next;
-		struct chunk_header_s	*prev;
-		#endif
-	*/
+		struct chunk_header_s	**prev; // point on use
+	#endif
 }	chunk_header_t;
 
-// #if DEV
-// chunk_header_t	*first
-// #endif
+#if DEV
+	chunk_header_t	*first_large = NULL;
+#endif
 
 
 /* Get the rounded up multiple of the page size */
@@ -104,11 +102,11 @@ static inline void	*malloc_tiny(size_t size)
 	return (tiny_data[idx]);         // Return data address
 }
 
-static inline void	*malloc_small(size_t size)
-{
-	(void)size;
-	return (NULL);
-}
+// static inline void	*malloc_small(size_t size)
+// {
+// 	(void)size;
+// 	return (NULL);
+// }
 
 static inline void	*malloc_large(size_t size)
 {
@@ -120,6 +118,14 @@ static inline void	*malloc_large(size_t size)
 	if (!(ptr = mmap(0, size, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0)))
 		return (NULL);
 	ptr->size = size;
+	#if DEV
+		// Push front
+		ptr->next = first_large;
+		ptr->prev = &first_large;
+		if (first_large)
+			first_large->prev = &ptr->next;
+		first_large = ptr;
+	#endif
 	return ((void *)(ptr + 1));
 }
 
@@ -129,8 +135,8 @@ void	*malloc(size_t size)
 
 	if (size <= 32 && (ptr = malloc_tiny(size)))
 		return (ptr);
-	if (size <= 256 && (ptr = malloc_small(size)))
-		return (ptr);
+	// if (size <= 256 && (ptr = malloc_small(size)))
+	// 	return (ptr);
 
 	return (malloc_large(size));
 }
@@ -150,7 +156,6 @@ void	free(void *ptr)
 		return ;
 	}
 
-
 	// if (
 	// 	ptr >= small_data
 	// 	&& ptr <= small_data + sizeof(small_data))
@@ -159,9 +164,16 @@ void	free(void *ptr)
 	// }
 
 	/* Move to allocation start */
-	ptr -= sizeof(chunk_header_t);
+	chunk_header_t	*chunk_header = (chunk_header_t *)ptr - 1;
+
+	#if DEV
+		if (chunk_header->next)
+			chunk_header->next->prev = chunk_header->prev;
+		*chunk_header->prev = chunk_header->next;
+	#endif
+
 	/* Get allocation size */
-	size_t	size = ((chunk_header_t *)ptr)->size;
+	size_t	size = chunk_header->size;
 	munmap(ptr, size);
 }
 
@@ -173,8 +185,10 @@ void	*realloc(void *ptr, size_t newdatasize)
 	/* Add the header size */
 	size_t	newsize = newdatasize + sizeof(chunk_header_t);
 
+	chunk_header_t	*chunk_header = (chunk_header_t *)ptr - 1;
+
 	/* Get current size */
-	size_t	size = ((chunk_header_t *)ptr - 1)->size;
+	size_t	size = chunk_header->size;
 
 	/* Check available space */
 	const int	pagesize = getpagesize();
@@ -183,7 +197,7 @@ void	*realloc(void *ptr, size_t newdatasize)
 	if (available >= newsize)
 	{
 		/* Update used space to know how much to copy next time */
-		((chunk_header_t *)ptr - 1)->size = newsize;
+		chunk_header->size = newsize;
 		/* Unmap the unused part */
 		size_t	newavailable = PAGE_SIZE_MULTIPLE(newsize, pagesize);
 		munmap(ptr - sizeof(chunk_header_t) + newavailable, available - newavailable);
@@ -210,7 +224,7 @@ void	*realloc(void *ptr, size_t newdatasize)
 void	show_alloc_mem(void)
 {
 	printf("\n═════════════ \033[1;94mAllocated mem\033[0m ═════════════\n");
-	printf("\033[94mTINY\033[0m : [%p, %p)\n", (void *)tiny_data, (void *)tiny_data + sizeof(tiny_data));
+	printf("\033[94mTiny\033[0m : [%p, %p)\n", (void *)tiny_data, (void *)tiny_data + sizeof(tiny_data));
 	for (int chunk_idx = 0; chunk_idx < 4; ++chunk_idx)
 	{
 		for (int idx = 0; idx < 64; ++idx)
@@ -227,7 +241,20 @@ void	show_alloc_mem(void)
 		}
 	}
 	#if DEV
+		printf("\033[91mLarge\033[0m\n");
+		const int	pagesize = getpagesize();
+		chunk_header_t	*node = first_large;
 
+		while (node)
+		{
+			printf("[%p, %p): %ld bytes (real %ld bytes)\n",
+				(void *)node + sizeof(chunk_header_t),
+				(void *)node + PAGE_SIZE_MULTIPLE(node->size, pagesize),
+				node->size - sizeof(chunk_header_t),
+				PAGE_SIZE_MULTIPLE(node->size, pagesize)
+			);
+			node = node->next;
+		}
 	#endif
 	printf("═════════════════════════════════════════\n\n");
 }
