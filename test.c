@@ -88,6 +88,17 @@ int	main()
 	ptr[0] = t_realloc(ptr[0], getpagesize() * 1000);
 	printf("realloc 1000 pages: %p\n", ptr[0]);
 
+	show_alloc_mem();
+
+	puts("Realloc tiny address");
+	ptr[0] = t_malloc(1);
+	ptr[0] = t_realloc(ptr[0], 32);
+	ptr[0] = t_realloc(ptr[0], 1);
+	ptr[0] = t_realloc(ptr[0], 128);
+
+	puts("malloc a lot");
+	// printf("malloc %p\n", malloc(10000000000000));
+	printf("malloc %p\n", malloc(1000000000000));
 
 	// clock_t	start = clock();
 	// for (int i = 0; i < 3907; ++i)

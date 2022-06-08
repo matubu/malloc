@@ -40,7 +40,7 @@ static inline int	lmub(uint64_t bytes)
 // free(small) ❌
 // free(large) ✅
 
-// realloc(tiny) ❌
+// realloc(tiny) ✅
 // realloc(small) ❌
 // realloc(large) ✅
 
@@ -54,16 +54,21 @@ static inline int	lmub(uint64_t bytes)
 
 // - Tiny [0-32] bytes (suitable for chained list)
 // tiny stack memory 8_480 bytes
-uint8_t		tiny_data[256][32];  // actual data/pointer 
+#define TINY_STORAGE 32
+#define IS_TINY_MEMORY_ADDRESS(addr) (addr >= (void *)tiny_data \
+		&& addr < (void *)tiny_data + sizeof(tiny_data))
+#define GET_TINY_MEMORY_ADDRESS_INDEX(addr) ((addr - (void *)tiny_data) / TINY_STORAGE)
+uint8_t		tiny_data[256][TINY_STORAGE];  // actual data/pointer 
 uint8_t		tiny_size[256];      // size of every memory address
 uint64_t	tiny_used[4] = {0};  // to keep track of used block
 
 
 // - Small [33-256] bytes (suitable for small length string)
 // small stack memory 65_824 bytes
-uint8_t		small_data[256][256];
-uint8_t		small_size[256];
-uint64_t	small_used[4] = {0};
+// #define SMALL_STORAGE 256
+// uint8_t		small_data[256][SMALL_STORAGE];
+// uint8_t		small_size[256];
+// uint64_t	small_used[4] = {0};
 
 // - Chunked memory block
 
@@ -110,12 +115,12 @@ static inline void	*malloc_tiny(size_t size)
 
 static inline void	*malloc_large(size_t size)
 {
-	chunk_header_t	*ptr;
 
 	/* Add the header size */
-	size += sizeof(chunk_header_t);
+	size += sizeof(chunk_header_t); // TODO fix overflow bug
 
-	if (!(ptr = mmap(0, size, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0)))
+	chunk_header_t	*ptr = mmap(0, size, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
+	if (ptr == MAP_FAILED)
 		return (NULL);
 	ptr->size = size;
 	#if DEV
@@ -146,12 +151,9 @@ void	free(void *ptr)
 	if (ptr == NULL)
 		return ;
 
-	if (
-		ptr >= (void *)tiny_data
-		&& ptr < (void *)tiny_data + sizeof(tiny_data)
-	)
+	if (IS_TINY_MEMORY_ADDRESS(ptr))
 	{
-		int idx = (ptr - (void *)tiny_data) / sizeof(tiny_data[0]);
+		int idx = GET_TINY_MEMORY_ADDRESS_INDEX(ptr);
 		tiny_used[idx / 64] &= ~(1 << (idx & 63));
 		return ;
 	}
@@ -182,27 +184,44 @@ void	*realloc(void *ptr, size_t newdatasize)
 	if (ptr == NULL)
 		return (malloc(newdatasize));
 
-	/* Add the header size */
-	size_t	newsize = newdatasize + sizeof(chunk_header_t);
-
-	chunk_header_t	*chunk_header = (chunk_header_t *)ptr - 1;
-
-	/* Get current size */
-	size_t	size = chunk_header->size;
-
-	/* Check available space */
-	const int	pagesize = getpagesize();
-	size_t		available = PAGE_SIZE_MULTIPLE(size, pagesize);
-
-	if (available >= newsize)
+	size_t	datasize = 0;
+	if (IS_TINY_MEMORY_ADDRESS(ptr))
 	{
-		/* Update used space to know how much to copy next time */
-		chunk_header->size = newsize;
-		/* Unmap the unused part */
-		size_t	newavailable = PAGE_SIZE_MULTIPLE(newsize, pagesize);
-		munmap(ptr - sizeof(chunk_header_t) + newavailable, available - newavailable);
-		/* Return original pointer */
-		return (ptr);
+		int idx = GET_TINY_MEMORY_ADDRESS_INDEX(ptr);
+		if (newdatasize <= TINY_STORAGE)
+		{
+			/* Update used space */
+			tiny_size[idx] = newdatasize;
+			/* Return original pointer */
+			return (ptr);
+		}
+		datasize = tiny_size[idx];
+	}
+	else
+	{
+		chunk_header_t	*chunk_header = (chunk_header_t *)ptr - 1;
+
+		/* Get current size */
+		size_t	size = chunk_header->size;
+		/* Calculate new size */
+		size_t	newsize = newdatasize + sizeof(chunk_header_t);
+
+		/* Check available space */
+		const int	pagesize = getpagesize();
+		size_t		available = PAGE_SIZE_MULTIPLE(size, pagesize);
+
+		if (available >= newsize)
+		{
+			/* Update used space to know how much to copy next time */
+			chunk_header->size = newsize;
+			/* Unmap the unused part */
+			size_t	newavailable = PAGE_SIZE_MULTIPLE(newsize, pagesize);
+			munmap(ptr - sizeof(chunk_header_t) + newavailable, available - newavailable);
+			/* Return original pointer */
+			return (ptr);
+		}
+
+		datasize = size - sizeof(chunk_header_t);
 	}
 
 	void	*newptr = malloc(newdatasize);
@@ -211,7 +230,6 @@ void	*realloc(void *ptr, size_t newdatasize)
 		return (NULL);
 
 	/* Copy memory */
-	size_t	datasize = size - sizeof(chunk_header_t);
 	for (size_t i = 0; i < datasize; ++i)
 		((char *)newptr)[i] = ((char *)ptr)[i];
 
@@ -231,11 +249,11 @@ void	show_alloc_mem(void)
 		{
 			if (tiny_used[chunk_idx] & ((uint64_t)1 << idx))
 			{
-				printf("[%p, %p): %d bytes (real %ld bytes)\n",
+				printf("[%p, %p): %d bytes (real %d bytes)\n",
 					(void *)&tiny_data[chunk_idx * 64 + idx],
 					(void *)&tiny_data[chunk_idx * 64 + idx + 1],
 					tiny_size[chunk_idx * 64 + idx],
-					sizeof(tiny_data[0])
+					TINY_STORAGE
 				);
 			}
 		}
