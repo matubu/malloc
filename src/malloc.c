@@ -31,26 +31,8 @@ static inline int	lmub(uint64_t bytes)
 	return (offset);
 }
 
-// TODO
-// malloc(tiny) ✅
-// malloc(small) ❌
-// malloc(large) ✅
-
-// free(tiny) ✅
-// free(small) ❌
-// free(large) ✅
-
-// realloc(tiny) ✅
-// realloc(small) ❌
-// realloc(large) ✅
-
-// show_alloc_mem(tiny) ✅
-// show_alloc_mem(small) ❌
-// show_alloc_mem(large) ✅
-
 // Zones
 // total stack memory preallocated 74_304 bytes
-
 
 // - Tiny [0-32] bytes (suitable for chained list)
 // tiny stack memory 8_480 bytes
@@ -58,20 +40,20 @@ static inline int	lmub(uint64_t bytes)
 #define IS_TINY_MEMORY_ADDRESS(addr) (addr >= (void *)tiny_data \
 		&& addr < (void *)tiny_data + sizeof(tiny_data))
 #define GET_TINY_MEMORY_ADDRESS_INDEX(addr) ((addr - (void *)tiny_data) / TINY_STORAGE)
-uint8_t		tiny_data[256][TINY_STORAGE];  // actual data/pointer 
-uint8_t		tiny_size[256];      // size of every memory address
 uint64_t	tiny_used[4] = {0};  // to keep track of used block
+uint8_t		tiny_size[256];      // size of every memory address
+uint8_t		tiny_data[256][TINY_STORAGE];  // actual data/pointer 
 
 
-// - Small [33-256] bytes (suitable for small length string)
+// - Small [33-128] bytes (suitable for small length string)
 // small stack memory 65_824 bytes
-// #define SMALL_STORAGE 256
-// uint8_t		small_data[256][SMALL_STORAGE];
-// uint8_t		small_size[256];
-// uint64_t	small_used[4] = {0};
-
-// - Chunked memory block
-
+#define SMALL_STORAGE 128
+#define IS_SMALL_MEMORY_ADDRESS(addr) (addr >= (void *)small_data \
+		&& addr < (void *)small_data + sizeof(small_data))
+#define GET_SMALL_MEMORY_ADDRESS_INDEX(addr) ((addr - (void *)small_data) / SMALL_STORAGE)
+uint64_t	small_used[4] = {0};
+uint8_t		small_size[256];
+uint8_t		small_data[256][SMALL_STORAGE];
 
 // - Large [257-∞] bytes (suitable for big buffer allocation)
 // 8 bytes header (24 byte in dev mode)
@@ -93,29 +75,28 @@ typedef struct chunk_header_s {
 /* Get the rounded up multiple of the page size */
 #define PAGE_SIZE_MULTIPLE(size, pagesize) ((size + pagesize - 1) & ~(pagesize - 1))
 
-static inline void	*malloc_tiny(size_t size)
+static inline void	*malloc_chunk(
+	uint64_t *chunk_used,
+	uint8_t *chunk_size,
+	int storage,
+	uint8_t chunk_data[256][storage],
+	size_t size
+)
 {
 	int	chunk_id = 0;
 	int	idx;
 
-	while ((idx = lmub(tiny_used[chunk_id])) == -1)
+	while ((idx = lmub(chunk_used[chunk_id])) == -1)
 		if (++chunk_id >= 4)
 			return (NULL);
-	tiny_used[chunk_id] |= 1 << idx; // Update to used
+	chunk_used[chunk_id] |= 1 << idx; // Update to used
 	idx += chunk_id * 64;
-	tiny_size[idx] = size;           // Update size for realloc
-	return (tiny_data[idx]);         // Return data address
+	chunk_size[idx] = size;           // Update size for realloc
+	return (chunk_data[idx]);         // Return data address
 }
-
-// static inline void	*malloc_small(size_t size)
-// {
-// 	(void)size;
-// 	return (NULL);
-// }
 
 static inline void	*malloc_large(size_t size)
 {
-
 	/* Add the header size */
 	size += sizeof(chunk_header_t); // TODO fix overflow bug
 
@@ -138,17 +119,34 @@ void	*malloc(size_t size)
 {
 	void	*ptr;
 
-	if (size <= 32 && (ptr = malloc_tiny(size)))
+	if (size == 0)
+		return ((void *)-1);
+
+	if (size <= TINY_STORAGE && (ptr = malloc_chunk(
+		tiny_used,
+		tiny_size,
+		TINY_STORAGE,
+		tiny_data,
+		size
+	)))
 		return (ptr);
-	// if (size <= 256 && (ptr = malloc_small(size)))
-	// 	return (ptr);
+	
+
+	if (size <= SMALL_STORAGE && (ptr = malloc_chunk(
+		small_used,
+		small_size,
+		SMALL_STORAGE,
+		small_data,
+		size
+	)))
+		return (ptr);
 
 	return (malloc_large(size));
 }
 
 void	free(void *ptr)
 {
-	if (ptr == NULL)
+	if (ptr == NULL || ptr == (void *)-1)
 		return ;
 
 	if (IS_TINY_MEMORY_ADDRESS(ptr))
@@ -158,12 +156,12 @@ void	free(void *ptr)
 		return ;
 	}
 
-	// if (
-	// 	ptr >= small_data
-	// 	&& ptr <= small_data + sizeof(small_data))
-	// {
-	// 	return ;
-	// }
+	if (IS_SMALL_MEMORY_ADDRESS(ptr))
+	{
+		int idx = GET_SMALL_MEMORY_ADDRESS_INDEX(ptr);
+		small_used[idx / 64] &= ~(1 << (idx & 63));
+		return ;
+	}
 
 	/* Move to allocation start */
 	chunk_header_t	*chunk_header = (chunk_header_t *)ptr - 1;
@@ -181,7 +179,7 @@ void	free(void *ptr)
 
 void	*realloc(void *ptr, size_t newdatasize)
 {
-	if (ptr == NULL)
+	if (ptr == NULL || ptr == (void *)-1)
 		return (malloc(newdatasize));
 
 	size_t	datasize = 0;
@@ -196,6 +194,18 @@ void	*realloc(void *ptr, size_t newdatasize)
 			return (ptr);
 		}
 		datasize = tiny_size[idx];
+	}
+	else if (IS_SMALL_MEMORY_ADDRESS(ptr))
+	{
+		int idx = GET_SMALL_MEMORY_ADDRESS_INDEX(ptr);
+		if (newdatasize <= SMALL_STORAGE)
+		{
+			/* Update used space */
+			small_size[idx] = newdatasize;
+			/* Return original pointer */
+			return (ptr);
+		}
+		datasize = small_size[idx];
 	}
 	else
 	{
@@ -239,25 +249,47 @@ void	*realloc(void *ptr, size_t newdatasize)
 	return (newptr);
 }
 
-void	show_alloc_mem(void)
+void	show_alloc_chunk(
+	uint64_t *chunk_used,
+	uint8_t *chunk_size,
+	int storage,
+	uint8_t chunk_data[256][storage]
+)
 {
-	printf("\n═════════════ \033[1;94mAllocated mem\033[0m ═════════════\n");
-	printf("\033[94mTiny\033[0m : [%p, %p)\n", (void *)tiny_data, (void *)tiny_data + sizeof(tiny_data));
 	for (int chunk_idx = 0; chunk_idx < 4; ++chunk_idx)
 	{
 		for (int idx = 0; idx < 64; ++idx)
 		{
-			if (tiny_used[chunk_idx] & ((uint64_t)1 << idx))
+			if (chunk_used[chunk_idx] & ((uint64_t)1 << idx))
 			{
 				printf("[%p, %p): %d bytes (real %d bytes)\n",
-					(void *)&tiny_data[chunk_idx * 64 + idx],
-					(void *)&tiny_data[chunk_idx * 64 + idx + 1],
-					tiny_size[chunk_idx * 64 + idx],
-					TINY_STORAGE
+					(void *)&chunk_data[chunk_idx * 64 + idx],
+					(void *)&chunk_data[chunk_idx * 64 + idx + 1],
+					chunk_size[chunk_idx * 64 + idx],
+					storage
 				);
 			}
 		}
 	}
+}
+
+void	show_alloc_mem(void)
+{
+	printf("\n═════════════ \033[1;94mAllocated mem\033[0m ═════════════\n");
+	printf("\033[94mTiny\033[0m : [%p, %p)\n", (void *)tiny_data, (void *)tiny_data + sizeof(tiny_data));
+	show_alloc_chunk(
+		tiny_used,
+		tiny_size,
+		TINY_STORAGE,
+		tiny_data
+	);
+	printf("\033[92mSmall\033[0m : [%p, %p)\n", (void *)small_data, (void *)small_data + sizeof(small_data));
+	show_alloc_chunk(
+		small_used,
+		small_size,
+		SMALL_STORAGE,
+		small_data
+	);
 	#if DEV
 		printf("\033[91mLarge\033[0m\n");
 		const int	pagesize = getpagesize();

@@ -47,93 +47,58 @@ int	main()
 	puts("╚═════════════════════╝");
 	puts("");
 
-	void	*ptr[4];
+	void	*nothing;
+	void	*tiny_ptr[4];
+	void	*small_ptr[4];
+	void	*large_ptr[4];
 
-	ptr[2] = t_malloc(31);
-	ptr[2] = t_malloc(33);
-	ptr[0] = t_malloc(0);
-	ptr[2] = t_malloc(32);
-	ptr[1] = t_malloc(3);
-	ptr[2] = t_malloc(16);
-	ptr[3] = t_malloc(12459);
+	nothing = t_malloc(0); // TODO test realloc
 
-	show_alloc_mem();
+	tiny_ptr[0] = t_malloc(1);
+	tiny_ptr[1] = t_malloc(3);
+	tiny_ptr[2] = t_malloc(16);
+	tiny_ptr[3] = t_malloc(32);
 
-	puts("Test free");
-	t_free(ptr[0]);
-	t_free(ptr[1]);
-	t_free(ptr[2]);
-	t_free(ptr[3]);
+	small_ptr[0] = t_malloc(33);
+	small_ptr[1] = t_malloc(35);
+	small_ptr[2] = t_malloc(120);
+	small_ptr[3] = t_malloc(128);
 
-	puts("Realloc on same spot");
-	ptr[0] = t_malloc(0);
-	ptr[1] = t_malloc(3);
-	ptr[2] = t_malloc(16);
-	ptr[3] = t_malloc(12459);
+	large_ptr[0] = t_malloc(129);
+	large_ptr[1] = t_malloc(800);
+	large_ptr[2] = t_malloc(1000);
+	large_ptr[3] = t_malloc(100000);
 
 	show_alloc_mem();
 
-	t_free(ptr[0]);
-	t_free(ptr[1]);
-	t_free(ptr[2]);
-	t_free(ptr[3]);
+	const int	size[] = {0, 5, 35, 500};
+	for (int i = 0; i < 4; ++i)
+	{
+		tiny_ptr[i] = t_realloc(tiny_ptr[i], size[i]);
+		small_ptr[i] = t_realloc(small_ptr[i], size[i]);
+		large_ptr[i] = t_realloc(large_ptr[i], size[i]);
+	}
 
 	show_alloc_mem();
 
-	puts("Allocate multiple pages");
-	ptr[0] = t_malloc(getpagesize() * 1000);
-	printf("malloc 1000 pages:  %p\n", ptr[0]);
-	ptr[0] = t_realloc(ptr[0], 10);
-	printf("realloc 10 bytes:   %p\n", ptr[0]);
-	ptr[0] = t_realloc(ptr[0], getpagesize() * 1000);
-	printf("realloc 1000 pages: %p\n", ptr[0]);
+	for (int i = 0; i < 4; ++i)
+	{
+		t_free(tiny_ptr[i]);
+		t_free(small_ptr[i]);
+		t_free(large_ptr[i]);
+	}
 
 	show_alloc_mem();
 
-	puts("Realloc tiny address");
-	ptr[0] = t_malloc(1);
-	ptr[0] = t_realloc(ptr[0], 32);
-	ptr[0] = t_realloc(ptr[0], 1);
-	ptr[0] = t_realloc(ptr[0], 128);
+	tiny_ptr[0] = t_realloc(nothing, 1);
+	small_ptr[0] = t_realloc(nothing, 33);
+	large_ptr[0] = t_realloc(nothing, 129);
 
-	puts("malloc a lot");
-	// printf("malloc %p\n", malloc(10000000000000));
-	printf("malloc %p\n", malloc(1000000000000));
+	show_alloc_mem();
 
-	// clock_t	start = clock();
-	// for (int i = 0; i < 3907; ++i)
-	// {
-	// 	char	*char_ptr[256];
-	// 	for (size_t j = 0; j < 256; ++j)
-	// 		char_ptr[j] = malloc(1);
-	// 	for (size_t j = 0; j < 256; ++j)
-	// 		free(char_ptr[j]);
-	// }
-	// printf("one million allocation: %lfms\n", (double)(clock() - start) / CLOCKS_PER_SEC * 1000);
-
-	// free(alloc(2));
-	// void *p1 = alloc(2);
-	// void *p2 = alloc(0);
-	// void *p3 = alloc(4);
-	// void *ptr = alloc(8);
-	// ptr = realloc(ptr, 12);
-	// ptr = realloc(ptr, 2);
-	// ptr = realloc(ptr, 32);
-	// ptr = realloc(ptr, 64);
-	// ptr = realloc(ptr, 8004);
-	// ptr = realloc(ptr, 2);
-	// ptr = realloc(ptr, 8004);
-	// free(alloc(10));
-	// free(p1);
-	// free(p2);
-	// free(p3);
-	// free(ptr);
-
-	// printf("-- realloc --\n");
-	// ptr = realloc(malloc(1), 8191-8);
-	// ptr = realloc(malloc(1), 8192-8);
-	// ptr = realloc(malloc(1), 8193-8);
-	// printf("-- realloc end --\n");
+	t_free(tiny_ptr[0]);
+	t_free(small_ptr[0]);
+	t_free(large_ptr[0]);
 
 	show_alloc_mem();
 
