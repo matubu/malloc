@@ -249,6 +249,26 @@ void	*realloc(void *ptr, size_t newdatasize)
 	return (newptr);
 }
 
+void	put_base(unsigned long long n, const char *base, int baselen)
+{
+	char	buf[19];
+	int		i;
+
+	i = 19;
+	do {
+		buf[--i] = base[n % baselen];
+		n /= baselen;
+	} while (n);
+	write(1, buf + i, 19 - i);
+}
+
+#define PUT(s) write(1, s, sizeof(s));
+#define PUTS(s) PUT(s "\n");
+#define PUT_BASE(n, base) put_base(n, base, sizeof(base));
+#define PTR(ptr) PUT("\033[93m0x") PUT_BASE((unsigned long long)ptr, "0123456789abcef") PUT("\033[0m");
+#define ULONG(n) PUT("\033[93m") PUT_BASE(n, "0123456789") PUT("\033[0m");
+
+
 void	show_alloc_chunk(
 	uint64_t *chunk_used,
 	uint8_t *chunk_size,
@@ -262,12 +282,10 @@ void	show_alloc_chunk(
 		{
 			if (chunk_used[chunk_idx] & ((uint64_t)1 << idx))
 			{
-				printf("[%p, %p): %d bytes (real %d bytes)\n",
-					(void *)&chunk_data[chunk_idx * 64 + idx],
-					(void *)&chunk_data[chunk_idx * 64 + idx + 1],
-					chunk_size[chunk_idx * 64 + idx],
-					storage
-				);
+				PUT("[") PTR(&chunk_data[chunk_idx * 64 + idx]) PUT(", ")
+				PTR(&chunk_data[chunk_idx * 64 + idx + 1]) PUT("): ")
+				ULONG(chunk_size[chunk_idx * 64 + idx]) PUT(" bytes (real ")
+				ULONG(storage) PUTS(" bytes)");
 			}
 		}
 	}
@@ -275,15 +293,15 @@ void	show_alloc_chunk(
 
 void	show_alloc_mem(void)
 {
-	printf("\n═════════════ \033[1;94mAllocated mem\033[0m ═════════════\n");
-	printf("\033[94mTiny\033[0m : [%p, %p)\n", (void *)tiny_data, (void *)tiny_data + sizeof(tiny_data));
+	PUTS("\n═════════════ \033[1;94mAllocated mem\033[0m ═════════════");
+	PUT("\033[94mTiny\033[0m : \033[94mrange\033[0m[") PTR(tiny_data) PUT(",") PTR(tiny_data + sizeof(tiny_data)) PUTS(")");
 	show_alloc_chunk(
 		tiny_used,
 		tiny_size,
 		TINY_STORAGE,
 		tiny_data
 	);
-	printf("\033[92mSmall\033[0m : [%p, %p)\n", (void *)small_data, (void *)small_data + sizeof(small_data));
+	PUT("\033[92mSmall\033[0m : \033[94mrange\033[0m[") PTR(small_data) PUT(", ") PTR(small_data + sizeof(small_data)) PUTS(")");
 	show_alloc_chunk(
 		small_used,
 		small_size,
@@ -291,20 +309,18 @@ void	show_alloc_mem(void)
 		small_data
 	);
 	#if DEV
-		printf("\033[91mLarge\033[0m\n");
+		PUTS("\033[91mLarge\033[0m");
 		const int	pagesize = getpagesize();
 		chunk_header_t	*node = first_large;
 
 		while (node)
 		{
-			printf("[%p, %p): %ld bytes (real %ld bytes)\n",
-				(void *)node + sizeof(chunk_header_t),
-				(void *)node + PAGE_SIZE_MULTIPLE(node->size, pagesize),
-				node->size - sizeof(chunk_header_t),
-				PAGE_SIZE_MULTIPLE(node->size, pagesize)
-			);
+			PUT("[") PTR(node + sizeof(chunk_header_t)) PUT(", ")
+			PTR(node + PAGE_SIZE_MULTIPLE(node->size, pagesize)) PUT("): ")
+			ULONG(node->size - sizeof(chunk_header_t)) PUT(" bytes (real ")
+			ULONG(PAGE_SIZE_MULTIPLE(node->size, pagesize)) PUTS(" bytes)");
 			node = node->next;
 		}
 	#endif
-	printf("═════════════════════════════════════════\n\n");
+	PUTS("═════════════════════════════════════════\n");
 }
