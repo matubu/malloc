@@ -40,6 +40,9 @@ void	*t_realloc(void *ptr, size_t n)
 	return (new_ptr);
 }
 
+#define SECTION(fmt, ...) \
+	printf("\n::: \033[91m" fmt "\033[0m -->\n\n", ##__VA_ARGS__)
+
 int	main()
 {
 	puts("╔═════════════════════╗");
@@ -52,18 +55,22 @@ int	main()
 	void	*small_ptr[4];
 	void	*large_ptr[4];
 
-	nothing = t_malloc(0); // TODO test realloc
+	SECTION("malloc nothing");
+	nothing = t_malloc(0);
 
+	SECTION("tiny malloc");
 	tiny_ptr[0] = t_malloc(1);
 	tiny_ptr[1] = t_malloc(3);
 	tiny_ptr[2] = t_malloc(16);
 	tiny_ptr[3] = t_malloc(32);
 
+	SECTION("small malloc");
 	small_ptr[0] = t_malloc(33);
 	small_ptr[1] = t_malloc(35);
 	small_ptr[2] = t_malloc(120);
 	small_ptr[3] = t_malloc(128);
 
+	SECTION("large malloc");
 	large_ptr[0] = t_malloc(129);
 	large_ptr[1] = t_malloc(800);
 	large_ptr[2] = t_malloc(1000);
@@ -71,9 +78,11 @@ int	main()
 
 	show_alloc_mem();
 
-	const int	size[] = {0, 5, 35, 500};
+	const int	size[] = {0, 5, 35, 9000};
+	const char	*types[] = {"nothing", "tiny", "small", "large"};
 	for (int i = 0; i < 4; ++i)
 	{
+		SECTION("realloc to %s", types[i]);
 		tiny_ptr[i] = t_realloc(tiny_ptr[i], size[i]);
 		small_ptr[i] = t_realloc(small_ptr[i], size[i]);
 		large_ptr[i] = t_realloc(large_ptr[i], size[i]);
@@ -81,6 +90,7 @@ int	main()
 
 	show_alloc_mem();
 
+	SECTION("free all memory");
 	for (int i = 0; i < 4; ++i)
 	{
 		t_free(tiny_ptr[i]);
@@ -90,12 +100,14 @@ int	main()
 
 	show_alloc_mem();
 
+	SECTION("realloc from nothing");
 	tiny_ptr[0] = t_realloc(nothing, 1);
 	small_ptr[0] = t_realloc(nothing, 33);
 	large_ptr[0] = t_realloc(nothing, 129);
 
 	show_alloc_mem();
 
+	SECTION("free all memory");
 	t_free(tiny_ptr[0]);
 	t_free(small_ptr[0]);
 	t_free(large_ptr[0]);
