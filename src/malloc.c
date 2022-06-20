@@ -294,14 +294,14 @@ void	show_alloc_chunk(
 void	show_alloc_mem(void)
 {
 	PUTS("\n═════════════ \033[1;94mAllocated mem\033[0m ═════════════");
-	PUT("\033[94mTiny\033[0m : \033[94mrange\033[0m[") PTR(tiny_data) PUT(",") PTR(tiny_data + sizeof(tiny_data)) PUTS(")");
+	PUT("\033[1;94mTiny\033[0m : range[") PTR(tiny_data) PUT(",") PTR(tiny_data + sizeof(tiny_data)) PUTS(")");
 	show_alloc_chunk(
 		tiny_used,
 		tiny_size,
 		TINY_STORAGE,
 		tiny_data
 	);
-	PUT("\033[92mSmall\033[0m : \033[94mrange\033[0m[") PTR(small_data) PUT(", ") PTR(small_data + sizeof(small_data)) PUTS(")");
+	PUT("\033[1;92mSmall\033[0m : range[") PTR(small_data) PUT(", ") PTR(small_data + sizeof(small_data)) PUTS(")");
 	show_alloc_chunk(
 		small_used,
 		small_size,
@@ -309,7 +309,7 @@ void	show_alloc_mem(void)
 		small_data
 	);
 	#if DEV
-		PUTS("\033[91mLarge\033[0m");
+		PUTS("\033[1;91mLarge\033[0m");
 		const int	pagesize = getpagesize();
 		chunk_header_t	*node = first_large;
 
