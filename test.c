@@ -4,6 +4,11 @@
 #include <sys/resource.h>
 #include <unistd.h>
 #include <time.h>
+#include "thread.h"
+
+// - DEFRAGMENT
+// - show_alloc_mem_ex
+// - thread safety
 
 #if 1
 	#include "malloc.h"
@@ -54,6 +59,23 @@ int	main()
 	PUTS("╚═════════════════════╝");
 	PUTS("");
 
+	SECTION("test defragment");
+
+	void	*chunks[] = {
+		t_malloc(8000),
+		t_malloc(8000),
+		t_malloc(8000)
+	};
+
+	for (size_t i = 0; i < sizeof(chunks) / sizeof(chunks[0]); ++i)
+		t_free(chunks[i]);
+
+	show_alloc_mem();
+
+	t_free(t_malloc(16000));
+
+	show_alloc_mem();
+
 	void	*nothing;
 	void	*tiny_ptr[4];
 	void	*small_ptr[4];
@@ -73,6 +95,8 @@ int	main()
 	small_ptr[1] = t_malloc(35);
 	small_ptr[2] = t_malloc(120);
 	small_ptr[3] = t_malloc(128);
+
+	show_alloc_mem_ex();
 
 	SECTION("large malloc");
 	large_ptr[0] = t_malloc(129);
@@ -109,13 +133,17 @@ int	main()
 	small_ptr[0] = t_realloc(nothing, 33);
 	large_ptr[0] = t_realloc(nothing, 129);
 
-	show_alloc_mem();
+	show_alloc_mem_ex();
 
 	SECTION("free all memory");
 	t_free(tiny_ptr[0]);
 	t_free(small_ptr[0]);
 	t_free(large_ptr[0]);
 
+	show_alloc_mem();
+
+	SECTION("test thread safety");
+	test_threads();
 	show_alloc_mem();
 
 	PUTS("");

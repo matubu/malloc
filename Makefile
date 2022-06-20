@@ -10,7 +10,7 @@ Header = malloc.h
 
 Incs = -I.
 Flag = $(Incs)
-Flag += -Wall -Wextra -Werror
+Flag += -Wall -Wextra -Werror -g
 Flag += -O3
 
 Red = \033[1;91m

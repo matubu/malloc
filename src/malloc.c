@@ -1,8 +1,8 @@
 #include <sys/mman.h>
 #include <sys/resource.h>
-#include <unistd.h>
 #include <stdint.h>
-#include <stdio.h>
+#include <pthread.h>
+#include "io.h"
 
 #ifndef DEV
 # define DEV 1
@@ -71,6 +71,8 @@ typedef struct chunk_header_s {
 	chunk_header_t	*first_large = NULL;
 #endif
 
+pthread_mutex_t chunk_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t large_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* Get the rounded up multiple of the page size */
 #define PAGE_SIZE_MULTIPLE(size, pagesize) ((size + pagesize - 1) & ~(pagesize - 1))
@@ -86,13 +88,22 @@ static inline void	*malloc_chunk(
 	int	chunk_id = 0;
 	int	idx;
 
+	pthread_mutex_lock(&chunk_mutex);
 	while ((idx = lmub(chunk_used[chunk_id])) == -1)
+	{
 		if (++chunk_id >= 4)
+		{
+			pthread_mutex_unlock(&chunk_mutex);
 			return (NULL);
+		}
+
+	}
 	chunk_used[chunk_id] |= 1 << idx; // Update to used
 	idx += chunk_id * 64;
 	chunk_size[idx] = size;           // Update size for realloc
-	return (chunk_data[idx]);         // Return data address
+	void	*addr = chunk_data[idx];
+	pthread_mutex_unlock(&chunk_mutex);
+	return (addr);                    // Return data address
 }
 
 static inline void	*malloc_large(size_t size)
@@ -105,12 +116,14 @@ static inline void	*malloc_large(size_t size)
 		return (NULL);
 	ptr->size = size;
 	#if DEV
+		pthread_mutex_lock(&large_mutex);
 		// Push front
 		ptr->next = first_large;
 		ptr->prev = &first_large;
 		if (first_large)
 			first_large->prev = &ptr->next;
 		first_large = ptr;
+		pthread_mutex_unlock(&large_mutex);
 	#endif
 	return ((void *)(ptr + 1));
 }
@@ -152,17 +165,22 @@ void	free(void *ptr)
 	if (IS_TINY_MEMORY_ADDRESS(ptr))
 	{
 		int idx = GET_TINY_MEMORY_ADDRESS_INDEX(ptr);
+		pthread_mutex_lock(&chunk_mutex);
 		tiny_used[idx / 64] &= ~(1 << (idx & 63));
+		pthread_mutex_unlock(&chunk_mutex);
 		return ;
 	}
 
 	if (IS_SMALL_MEMORY_ADDRESS(ptr))
 	{
 		int idx = GET_SMALL_MEMORY_ADDRESS_INDEX(ptr);
+		pthread_mutex_lock(&chunk_mutex);
 		small_used[idx / 64] &= ~(1 << (idx & 63));
+		pthread_mutex_unlock(&chunk_mutex);
 		return ;
 	}
 
+	pthread_mutex_lock(&large_mutex);
 	/* Move to allocation start */
 	chunk_header_t	*chunk_header = (chunk_header_t *)ptr - 1;
 
@@ -171,10 +189,11 @@ void	free(void *ptr)
 			chunk_header->next->prev = chunk_header->prev;
 		*chunk_header->prev = chunk_header->next;
 	#endif
+	pthread_mutex_unlock(&large_mutex);
 
 	/* Get allocation size */
 	size_t	size = chunk_header->size;
-	munmap(ptr, size);
+	munmap(chunk_header, size);
 }
 
 void	*realloc(void *ptr, size_t newdatasize)
@@ -186,29 +205,36 @@ void	*realloc(void *ptr, size_t newdatasize)
 	if (IS_TINY_MEMORY_ADDRESS(ptr))
 	{
 		int idx = GET_TINY_MEMORY_ADDRESS_INDEX(ptr);
+		pthread_mutex_lock(&chunk_mutex);
 		if (newdatasize <= TINY_STORAGE)
 		{
 			/* Update used space */
 			tiny_size[idx] = newdatasize;
 			/* Return original pointer */
+			pthread_mutex_unlock(&chunk_mutex);
 			return (ptr);
 		}
 		datasize = tiny_size[idx];
+		pthread_mutex_unlock(&chunk_mutex);
 	}
 	else if (IS_SMALL_MEMORY_ADDRESS(ptr))
 	{
 		int idx = GET_SMALL_MEMORY_ADDRESS_INDEX(ptr);
+		pthread_mutex_lock(&chunk_mutex);
 		if (newdatasize <= SMALL_STORAGE)
 		{
 			/* Update used space */
 			small_size[idx] = newdatasize;
 			/* Return original pointer */
+			pthread_mutex_unlock(&chunk_mutex);
 			return (ptr);
 		}
 		datasize = small_size[idx];
+		pthread_mutex_unlock(&chunk_mutex);
 	}
 	else
 	{
+		pthread_mutex_lock(&large_mutex);
 		chunk_header_t	*chunk_header = (chunk_header_t *)ptr - 1;
 
 		/* Get current size */
@@ -224,12 +250,14 @@ void	*realloc(void *ptr, size_t newdatasize)
 		{
 			/* Update used space to know how much to copy next time */
 			chunk_header->size = newsize;
+			pthread_mutex_unlock(&large_mutex);
 			/* Unmap the unused part */
 			size_t	newavailable = PAGE_SIZE_MULTIPLE(newsize, pagesize);
 			munmap(ptr - sizeof(chunk_header_t) + newavailable, available - newavailable);
 			/* Return original pointer */
 			return (ptr);
 		}
+		pthread_mutex_unlock(&large_mutex);
 
 		datasize = size - sizeof(chunk_header_t);
 	}
@@ -249,78 +277,95 @@ void	*realloc(void *ptr, size_t newdatasize)
 	return (newptr);
 }
 
-void	put_base(unsigned long long n, const char *base, int baselen)
-{
-	char	buf[19];
-	int		i;
-
-	i = 19;
-	do {
-		buf[--i] = base[n % baselen];
-		n /= baselen;
-	} while (n);
-	write(1, buf + i, 19 - i);
+#define SHOW_ALLOC_CHUNK(used, size, storage, data, callback) { \
+	for (int chunk_idx = 0; chunk_idx < 4; ++chunk_idx) \
+	{ \
+		for (int idx = 0; idx < 64; ++idx) \
+		{ \
+			if (used[chunk_idx] & ((uint64_t)1 << idx)) \
+			{ \
+				PUT("[") PTR(&data[chunk_idx * 64 + idx]) PUT(", ") \
+				PTR(&data[chunk_idx * 64 + idx + 1]) PUT("): ") \
+				ULONG(size[chunk_idx * 64 + idx]) PUT(" bytes (real ") \
+				ULONG(storage) PUTS(" bytes)"); \
+				callback((char *)(&data[chunk_idx * 64 + idx]), size[chunk_idx * 64 + idx]); \
+			} \
+		} \
+	} \
 }
 
-#define PUT(s) write(1, s, sizeof(s));
-#define PUTS(s) PUT(s "\n");
-#define PUT_BASE(n, base) put_base(n, base, sizeof(base));
-#define PTR(ptr) PUT("\033[93m0x") PUT_BASE((unsigned long long)ptr, "0123456789abcef") PUT("\033[0m");
-#define ULONG(n) PUT("\033[93m") PUT_BASE(n, "0123456789") PUT("\033[0m");
-
-
-void	show_alloc_chunk(
-	uint64_t *chunk_used,
-	uint8_t *chunk_size,
-	int storage,
-	uint8_t chunk_data[256][storage]
-)
-{
-	for (int chunk_idx = 0; chunk_idx < 4; ++chunk_idx)
-	{
-		for (int idx = 0; idx < 64; ++idx)
-		{
-			if (chunk_used[chunk_idx] & ((uint64_t)1 << idx))
-			{
-				PUT("[") PTR(&chunk_data[chunk_idx * 64 + idx]) PUT(", ")
-				PTR(&chunk_data[chunk_idx * 64 + idx + 1]) PUT("): ")
-				ULONG(chunk_size[chunk_idx * 64 + idx]) PUT(" bytes (real ")
-				ULONG(storage) PUTS(" bytes)");
-			}
-		}
-	}
+#if DEV
+# define SHOW_ALLOC_LARGE(callback) { \
+	PUTS("\033[1;91mLarge\033[0m"); \
+	const int	pagesize = getpagesize(); \
+	chunk_header_t	*node = first_large; \
+	while (node) \
+	{ \
+		PUT("[") PTR((void *)node + sizeof(chunk_header_t)) PUT(", ") \
+		PTR(node + PAGE_SIZE_MULTIPLE(node->size, pagesize)) PUT("): ") \
+		ULONG(node->size - sizeof(chunk_header_t)) PUT(" bytes (real ") \
+		ULONG(PAGE_SIZE_MULTIPLE(node->size, pagesize)) PUTS(" bytes)"); \
+		callback((char *)(node + 1), node->size - sizeof(chunk_header_t)); \
+		node = node->next; \
+	} \
 }
+#else
+# define SHOW_ALLOC_LARGE()
+#endif
+
+#define SHOW_ALLOC_MEM(callback) { \
+	pthread_mutex_lock(&chunk_mutex); \
+	pthread_mutex_lock(&large_mutex); \
+	PUTS("\n═════════════ \033[1;94mAllocated mem\033[0m ═════════════"); \
+	PUT("\033[1;94mTiny\033[0m : range[") PTR(tiny_data) PUT(",") PTR(tiny_data + sizeof(tiny_data)) PUTS(")"); \
+	SHOW_ALLOC_CHUNK( \
+		tiny_used, \
+		tiny_size, \
+		TINY_STORAGE, \
+		tiny_data, \
+		callback \
+	); \
+	PUT("\033[1;92mSmall\033[0m : range[") PTR(small_data) PUT(", ") PTR(small_data + sizeof(small_data)) PUTS(")"); \
+	SHOW_ALLOC_CHUNK( \
+		small_used, \
+		small_size, \
+		SMALL_STORAGE, \
+		small_data, \
+		callback \
+	); \
+	SHOW_ALLOC_LARGE(callback); \
+	PUTS("═════════════════════════════════════════\n"); \
+	pthread_mutex_unlock(&chunk_mutex); \
+	pthread_mutex_unlock(&large_mutex); \
+}
+
+// #include <execinfo.h>
+// #include <stdio.h>
+
+// void	show_backtrace(void)
+// {
+// 	void	*array[64];
+// 	char	**strings;
+// 	int		size, i;
+
+// 	size = backtrace(array, 64);
+// 	strings = backtrace_symbols(array, size);
+// 	if (strings != NULL)
+// 	{
+// 		printf ("Obtained %d stack frames.\n", size);
+// 		for (i = 0; i < size; i++)
+// 			printf ("%s\n", strings[i]);
+// 	}
+
+// 	free(strings);
+// }
 
 void	show_alloc_mem(void)
 {
-	PUTS("\n═════════════ \033[1;94mAllocated mem\033[0m ═════════════");
-	PUT("\033[1;94mTiny\033[0m : range[") PTR(tiny_data) PUT(",") PTR(tiny_data + sizeof(tiny_data)) PUTS(")");
-	show_alloc_chunk(
-		tiny_used,
-		tiny_size,
-		TINY_STORAGE,
-		tiny_data
-	);
-	PUT("\033[1;92mSmall\033[0m : range[") PTR(small_data) PUT(", ") PTR(small_data + sizeof(small_data)) PUTS(")");
-	show_alloc_chunk(
-		small_used,
-		small_size,
-		SMALL_STORAGE,
-		small_data
-	);
-	#if DEV
-		PUTS("\033[1;91mLarge\033[0m");
-		const int	pagesize = getpagesize();
-		chunk_header_t	*node = first_large;
+	SHOW_ALLOC_MEM();
+}
 
-		while (node)
-		{
-			PUT("[") PTR(node + sizeof(chunk_header_t)) PUT(", ")
-			PTR(node + PAGE_SIZE_MULTIPLE(node->size, pagesize)) PUT("): ")
-			ULONG(node->size - sizeof(chunk_header_t)) PUT(" bytes (real ")
-			ULONG(PAGE_SIZE_MULTIPLE(node->size, pagesize)) PUTS(" bytes)");
-			node = node->next;
-		}
-	#endif
-	PUTS("═════════════════════════════════════════\n");
+void	show_alloc_mem_ex(void)
+{
+	SHOW_ALLOC_MEM(hexdump);
 }
