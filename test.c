@@ -9,6 +9,8 @@
 // - DEFRAGMENT
 // - show_alloc_mem_ex
 // - thread safety
+// - full cleanup
+// - safe malloc
 
 #if 1
 	#include "malloc.h"
@@ -146,8 +148,11 @@ int	main()
 	test_threads();
 	show_alloc_mem();
 
-	PUTS("");
-	PUTS("╔═════════════════════════╗");
-	PUTS("║   Malloc tests end 🐘   ║");
-	PUTS("╚═════════════════════════╝");
+	SECTION("test cleanup");
+	cleanup();
+	show_alloc_mem();
+
+	SECTION("safe malloc");
+	void *ptr = safe_malloc(10000000000000000);
+	t_free(ptr);
 }

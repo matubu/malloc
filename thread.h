@@ -17,7 +17,8 @@ void	*allocate(void *i)
 	{
 		void *ptr = malloc(rand_malloc());
 		ptr = realloc(ptr, rand_malloc());
-		free(ptr);
+		if (rand() % 2)
+			free(ptr);
 	}
 	return (NULL);
 }

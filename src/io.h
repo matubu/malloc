@@ -2,6 +2,14 @@
 
 #include <unistd.h>
 
+int len(char *s)
+{
+	int l = 0;
+	while (s[l])
+		++l;
+	return (l);
+}
+
 static inline void	put_base(unsigned long long n, const char *base, int baselen)
 {
 	char	buf[19];
@@ -15,7 +23,6 @@ static inline void	put_base(unsigned long long n, const char *base, int baselen)
 	write(1, buf + i, 19 - i);
 }
 
-#include <stdio.h>
 static inline void	put_hex_pad(unsigned long long n, int pad)
 {
 	char	buf[16];
@@ -50,4 +57,10 @@ static inline void	hexdump(char *ptr, size_t size)
 		}
 		PUTS("");
 	}
+}
+
+void	puts(char *s)
+{
+	write(1, s, len(s));
+	PUTS("");
 }

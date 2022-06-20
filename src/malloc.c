@@ -2,6 +2,7 @@
 #include <sys/resource.h>
 #include <stdint.h>
 #include <pthread.h>
+#include <stdlib.h>
 #include "io.h"
 
 #ifndef DEV
@@ -339,27 +340,6 @@ void	*realloc(void *ptr, size_t newdatasize)
 	pthread_mutex_unlock(&large_mutex); \
 }
 
-// #include <execinfo.h>
-// #include <stdio.h>
-
-// void	show_backtrace(void)
-// {
-// 	void	*array[64];
-// 	char	**strings;
-// 	int		size, i;
-
-// 	size = backtrace(array, 64);
-// 	strings = backtrace_symbols(array, size);
-// 	if (strings != NULL)
-// 	{
-// 		printf ("Obtained %d stack frames.\n", size);
-// 		for (i = 0; i < size; i++)
-// 			printf ("%s\n", strings[i]);
-// 	}
-
-// 	free(strings);
-// }
-
 void	show_alloc_mem(void)
 {
 	SHOW_ALLOC_MEM();
@@ -368,4 +348,66 @@ void	show_alloc_mem(void)
 void	show_alloc_mem_ex(void)
 {
 	SHOW_ALLOC_MEM(hexdump);
+}
+
+#if DEV
+void	cleanup(void)
+{
+	pthread_mutex_lock(&chunk_mutex);
+
+	for (int chunk_idx = 0; chunk_idx < 4; ++chunk_idx)
+	{
+		tiny_used[chunk_idx] = 0;
+		small_used[chunk_idx] = 0;
+	}
+
+	pthread_mutex_unlock(&chunk_mutex);
+
+	pthread_mutex_lock(&large_mutex);
+	chunk_header_t	*node = first_large;
+	pthread_mutex_unlock(&large_mutex);
+	while (node)
+	{
+		pthread_mutex_lock(&large_mutex);
+		chunk_header_t	*next  = node->next;
+		pthread_mutex_unlock(&large_mutex);
+
+		free((void *)(node + 1));
+
+		node = next;
+	}
+}
+#endif
+
+#include <execinfo.h>
+
+void	show_backtrace(void)
+{
+	void	*array[64];
+	char	**strings;
+	int		size, i;
+
+	size = backtrace(array, 64);
+	strings = backtrace_symbols(array, size);
+	if (strings == NULL)
+	{
+		PUTS("\033[91mError\033[0m cannot load backtrace");
+		return ;
+	}
+	PUTS("\nBacktrace:");
+	for (i = 0; i < size; i++)
+		puts(strings[i]);
+}
+
+void	*safe_malloc(size_t size)
+{
+	void	*ptr = malloc(size);
+	if (ptr == NULL)
+	{
+		cleanup();
+		PUT("\033[91mError\033[0m cannot allocate ") ULONG(size) PUTS(" bytes");
+		show_backtrace();
+		exit(1);
+	}
+	return (ptr);
 }
