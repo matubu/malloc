@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <pthread.h>
 #include <stdlib.h>
+#include <execinfo.h>
 #include "io.h"
 
 #ifndef DEV
@@ -378,8 +379,6 @@ void	cleanup(void)
 	}
 }
 #endif
-
-#include <execinfo.h>
 
 void	show_backtrace(void)
 {
