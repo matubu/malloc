@@ -69,6 +69,8 @@ int	main()
 		t_malloc(8000)
 	};
 
+	show_alloc_mem();
+
 	for (size_t i = 0; i < sizeof(chunks) / sizeof(chunks[0]); ++i)
 		t_free(chunks[i]);
 

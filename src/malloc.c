@@ -279,7 +279,7 @@ void	*realloc(void *ptr, size_t newdatasize)
 	return (newptr);
 }
 
-#define SHOW_ALLOC_CHUNK(used, size, storage, data, callback) { \
+#define SHOW_ALLOC_CHUNK(used, size, storage, data, total, callback) { \
 	for (int chunk_idx = 0; chunk_idx < 4; ++chunk_idx) \
 	{ \
 		for (int idx = 0; idx < 64; ++idx) \
@@ -290,6 +290,7 @@ void	*realloc(void *ptr, size_t newdatasize)
 				PTR(&data[chunk_idx * 64 + idx + 1]) PUT("): ") \
 				ULONG(size[chunk_idx * 64 + idx]) PUT(" bytes (real ") \
 				ULONG(storage) PUTS(" bytes)"); \
+				total += size[chunk_idx * 64 + idx]; \
 				callback((char *)(&data[chunk_idx * 64 + idx]), size[chunk_idx * 64 + idx]); \
 			} \
 		} \
@@ -297,7 +298,7 @@ void	*realloc(void *ptr, size_t newdatasize)
 }
 
 #if DEV
-# define SHOW_ALLOC_LARGE(callback) { \
+# define SHOW_ALLOC_LARGE(total, callback) { \
 	PUTS("\033[1;91mLarge\033[0m"); \
 	const int	pagesize = getpagesize(); \
 	chunk_header_t	*node = first_large; \
@@ -308,6 +309,7 @@ void	*realloc(void *ptr, size_t newdatasize)
 		ULONG(node->size - sizeof(chunk_header_t)) PUT(" bytes (real ") \
 		ULONG(PAGE_SIZE_MULTIPLE(node->size, pagesize)) PUTS(" bytes)"); \
 		callback((char *)(node + 1), node->size - sizeof(chunk_header_t)); \
+		total += node->size - sizeof(chunk_header_t); \
 		node = node->next; \
 	} \
 }
@@ -320,11 +322,13 @@ void	*realloc(void *ptr, size_t newdatasize)
 	pthread_mutex_lock(&large_mutex); \
 	PUTS("\n═════════════ \033[1;94mAllocated mem\033[0m ═════════════"); \
 	PUT("\033[1;94mTiny\033[0m : range[") PTR(tiny_data) PUT(",") PTR(tiny_data + sizeof(tiny_data)) PUTS(")"); \
+	size_t	total = 0; \
 	SHOW_ALLOC_CHUNK( \
 		tiny_used, \
 		tiny_size, \
 		TINY_STORAGE, \
 		tiny_data, \
+		total, \
 		callback \
 	); \
 	PUT("\033[1;92mSmall\033[0m : range[") PTR(small_data) PUT(", ") PTR(small_data + sizeof(small_data)) PUTS(")"); \
@@ -333,9 +337,11 @@ void	*realloc(void *ptr, size_t newdatasize)
 		small_size, \
 		SMALL_STORAGE, \
 		small_data, \
+		total, \
 		callback \
 	); \
-	SHOW_ALLOC_LARGE(callback); \
+	SHOW_ALLOC_LARGE(total, callback); \
+	PUT("Total : ") ULONG(total) PUTS(" bytes"); \
 	PUTS("═════════════════════════════════════════\n"); \
 	pthread_mutex_unlock(&chunk_mutex); \
 	pthread_mutex_unlock(&large_mutex); \
