@@ -6,7 +6,7 @@
 #include <time.h>
 #include "thread.h"
 
-// - DEFRAGMENT
+// - defragmentation
 // - show_alloc_mem_ex
 // - thread safety
 // - full cleanup
