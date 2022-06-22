@@ -186,11 +186,29 @@ void	free(void *ptr)
 	/* Move to allocation start */
 	chunk_header_t	*chunk_header = (chunk_header_t *)ptr - 1;
 
+	PUTS("before");
+	chunk_header_t	*node = first_large;
+	while (node)
+	{
+		if (node == chunk_header)
+			break ;
+		PTR(node); PUTS("");
+		node = node->next;
+	}
+	PUTS("after");
+	if (node == NULL)
+	{
+		PUTS("return");
+		pthread_mutex_unlock(&large_mutex);
+		return ;
+	}
+
 	#if DEV
 		if (chunk_header->next)
 			chunk_header->next->prev = chunk_header->prev;
 		*chunk_header->prev = chunk_header->next;
 	#endif
+	PUTS("after");
 	pthread_mutex_unlock(&large_mutex);
 
 	/* Get allocation size */
@@ -200,7 +218,7 @@ void	free(void *ptr)
 
 void	*realloc(void *ptr, size_t newdatasize)
 {
-	if (ptr == NULL || ptr == (void *)-1)
+	// if (ptr == NULL || ptr == (void *)-1)
 		return (malloc(newdatasize));
 
 	size_t	datasize = 0;
