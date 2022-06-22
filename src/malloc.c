@@ -35,23 +35,23 @@ static inline int	lmub(uint64_t bytes)
 // - Tiny [0-32] bytes (suitable for chained list)
 // tiny stack memory 8_480 bytes
 #define TINY_STORAGE 32
-#define IS_TINY_MEMORY_ADDRESS(addr) (addr >= (void *)tiny_data \
-		&& addr < (void *)tiny_data + sizeof(tiny_data))
-#define GET_TINY_MEMORY_ADDRESS_INDEX(addr) ((addr - (void *)tiny_data) / TINY_STORAGE)
 uint64_t	tiny_used[4] = {0};  // to keep track of used block
 uint8_t		tiny_size[256];      // size of every memory address
 uint8_t		tiny_data[256][TINY_STORAGE];  // actual data/pointer 
+#define IS_TINY_MEMORY_ADDRESS(addr) (addr >= (void *)tiny_data \
+		&& addr < (void *)tiny_data + sizeof(tiny_data))
+#define GET_TINY_MEMORY_ADDRESS_INDEX(addr) ((addr - (void *)tiny_data) / TINY_STORAGE)
 
 
 // - Small [33-128] bytes (suitable for small length string)
 // small stack memory 65_824 bytes
 #define SMALL_STORAGE 128
-#define IS_SMALL_MEMORY_ADDRESS(addr) (addr >= (void *)small_data \
-		&& addr < (void *)small_data + sizeof(small_data))
-#define GET_SMALL_MEMORY_ADDRESS_INDEX(addr) ((addr - (void *)small_data) / SMALL_STORAGE)
 uint64_t	small_used[4] = {0};
 uint8_t		small_size[256];
 uint8_t		small_data[256][SMALL_STORAGE];
+#define IS_SMALL_MEMORY_ADDRESS(addr) (addr >= (void *)small_data \
+		&& addr < (void *)small_data + sizeof(small_data))
+#define GET_SMALL_MEMORY_ADDRESS_INDEX(addr) ((addr - (void *)small_data) / SMALL_STORAGE)
 
 // - Large [257-∞] bytes (suitable for big buffer allocation)
 // 24 byte
