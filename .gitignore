@@ -1,5 +1,6 @@
 test
-test.dSYM
+*.dSYM
 .DS_Store
 *.so
 bin
+*.out

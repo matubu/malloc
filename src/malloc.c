@@ -6,10 +6,6 @@
 #include <execinfo.h>
 #include "io.h"
 
-#ifndef DEV
-# define DEV 1
-#endif
-
 // Left most unset bit
 static inline int	lmub(uint64_t bytes)
 {
@@ -58,23 +54,32 @@ uint8_t		small_size[256];
 uint8_t		small_data[256][SMALL_STORAGE];
 
 // - Large [257-∞] bytes (suitable for big buffer allocation)
-// 8 bytes header (24 byte in dev mode)
+// 24 byte
 // | [8 bytes] header | data |
 // | containing size  |      |
 typedef struct chunk_header_s {
 	size_t			size;
-	#if DEV
-		struct chunk_header_s	*next;
-		struct chunk_header_s	**prev; // point on use
-	#endif
+	struct chunk_header_s	*next;
+	struct chunk_header_s	**prev; // point on use
 }	chunk_header_t;
 
-#if DEV
-	chunk_header_t	*first_large = NULL;
-#endif
+chunk_header_t	*first_large = NULL;
 
-pthread_mutex_t chunk_mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_mutex_t large_mutex = PTHREAD_MUTEX_INITIALIZER;
+int	is_large_memory_address(chunk_header_t *ptr)
+{
+	chunk_header_t	*node = first_large;
+
+	--ptr; // Go to header location
+	while (node)
+	{
+		if (node == ptr)
+			return (1);
+		node = node->next;
+	}
+	return (0);
+}
+
+pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* Get the rounded up multiple of the page size */
 #define PAGE_SIZE_MULTIPLE(size, pagesize) ((size + pagesize - 1) & ~(pagesize - 1))
@@ -90,12 +95,12 @@ static inline void	*malloc_chunk(
 	int	chunk_id = 0;
 	int	idx;
 
-	pthread_mutex_lock(&chunk_mutex);
+	pthread_mutex_lock(&g_mutex);
 	while ((idx = lmub(chunk_used[chunk_id])) == -1)
 	{
 		if (++chunk_id >= 4)
 		{
-			pthread_mutex_unlock(&chunk_mutex);
+			pthread_mutex_unlock(&g_mutex);
 			return (NULL);
 		}
 
@@ -104,7 +109,7 @@ static inline void	*malloc_chunk(
 	idx += chunk_id * 64;
 	chunk_size[idx] = size;           // Update size for realloc
 	void	*addr = chunk_data[idx];
-	pthread_mutex_unlock(&chunk_mutex);
+	pthread_mutex_unlock(&g_mutex);
 	return (addr);                    // Return data address
 }
 
@@ -117,16 +122,14 @@ static inline void	*malloc_large(size_t size)
 	if (ptr == MAP_FAILED)
 		return (NULL);
 	ptr->size = size;
-	#if DEV
-		pthread_mutex_lock(&large_mutex);
-		// Push front
-		ptr->next = first_large;
-		ptr->prev = &first_large;
-		if (first_large)
-			first_large->prev = &ptr->next;
-		first_large = ptr;
-		pthread_mutex_unlock(&large_mutex);
-	#endif
+	pthread_mutex_lock(&g_mutex);
+	// Push front
+	ptr->next = first_large;
+	ptr->prev = &first_large;
+	if (first_large)
+		first_large->prev = &ptr->next;
+	first_large = ptr;
+	pthread_mutex_unlock(&g_mutex);
 	return ((void *)(ptr + 1));
 }
 
@@ -167,49 +170,36 @@ void	free(void *ptr)
 	if (IS_TINY_MEMORY_ADDRESS(ptr))
 	{
 		int idx = GET_TINY_MEMORY_ADDRESS_INDEX(ptr);
-		pthread_mutex_lock(&chunk_mutex);
+		pthread_mutex_lock(&g_mutex);
 		tiny_used[idx / 64] &= ~(1 << (idx & 63));
-		pthread_mutex_unlock(&chunk_mutex);
+		pthread_mutex_unlock(&g_mutex);
 		return ;
 	}
 
 	if (IS_SMALL_MEMORY_ADDRESS(ptr))
 	{
 		int idx = GET_SMALL_MEMORY_ADDRESS_INDEX(ptr);
-		pthread_mutex_lock(&chunk_mutex);
+		pthread_mutex_lock(&g_mutex);
 		small_used[idx / 64] &= ~(1 << (idx & 63));
-		pthread_mutex_unlock(&chunk_mutex);
+		pthread_mutex_unlock(&g_mutex);
 		return ;
 	}
 
-	pthread_mutex_lock(&large_mutex);
+	pthread_mutex_lock(&g_mutex);
+
+	if (!is_large_memory_address(ptr))
+	{
+		pthread_mutex_unlock(&g_mutex);
+		return ;
+	}
+
 	/* Move to allocation start */
 	chunk_header_t	*chunk_header = (chunk_header_t *)ptr - 1;
 
-	PUTS("before");
-	chunk_header_t	*node = first_large;
-	while (node)
-	{
-		if (node == chunk_header)
-			break ;
-		PTR(node); PUTS("");
-		node = node->next;
-	}
-	PUTS("after");
-	if (node == NULL)
-	{
-		PUTS("return");
-		pthread_mutex_unlock(&large_mutex);
-		return ;
-	}
-
-	#if DEV
-		if (chunk_header->next)
-			chunk_header->next->prev = chunk_header->prev;
-		*chunk_header->prev = chunk_header->next;
-	#endif
-	PUTS("after");
-	pthread_mutex_unlock(&large_mutex);
+	if (chunk_header->next)
+		chunk_header->next->prev = chunk_header->prev;
+	*chunk_header->prev = chunk_header->next;
+	pthread_mutex_unlock(&g_mutex);
 
 	/* Get allocation size */
 	size_t	size = chunk_header->size;
@@ -218,43 +208,50 @@ void	free(void *ptr)
 
 void	*realloc(void *ptr, size_t newdatasize)
 {
-	// if (ptr == NULL || ptr == (void *)-1)
+	if (ptr == NULL || ptr == (void *)-1)
 		return (malloc(newdatasize));
 
 	size_t	datasize = 0;
 	if (IS_TINY_MEMORY_ADDRESS(ptr))
 	{
 		int idx = GET_TINY_MEMORY_ADDRESS_INDEX(ptr);
-		pthread_mutex_lock(&chunk_mutex);
+		pthread_mutex_lock(&g_mutex);
 		if (newdatasize <= TINY_STORAGE)
 		{
 			/* Update used space */
 			tiny_size[idx] = newdatasize;
 			/* Return original pointer */
-			pthread_mutex_unlock(&chunk_mutex);
+			pthread_mutex_unlock(&g_mutex);
 			return (ptr);
 		}
 		datasize = tiny_size[idx];
-		pthread_mutex_unlock(&chunk_mutex);
+		pthread_mutex_unlock(&g_mutex);
 	}
 	else if (IS_SMALL_MEMORY_ADDRESS(ptr))
 	{
 		int idx = GET_SMALL_MEMORY_ADDRESS_INDEX(ptr);
-		pthread_mutex_lock(&chunk_mutex);
+		pthread_mutex_lock(&g_mutex);
 		if (newdatasize <= SMALL_STORAGE)
 		{
 			/* Update used space */
 			small_size[idx] = newdatasize;
 			/* Return original pointer */
-			pthread_mutex_unlock(&chunk_mutex);
+			pthread_mutex_unlock(&g_mutex);
 			return (ptr);
 		}
 		datasize = small_size[idx];
-		pthread_mutex_unlock(&chunk_mutex);
+		pthread_mutex_unlock(&g_mutex);
 	}
 	else
 	{
-		pthread_mutex_lock(&large_mutex);
+		pthread_mutex_lock(&g_mutex);
+		if (!is_large_memory_address(ptr))
+		{
+			pthread_mutex_unlock(&g_mutex);
+			PUTS("not mine");
+			return (NULL);
+		}
+
 		chunk_header_t	*chunk_header = (chunk_header_t *)ptr - 1;
 
 		/* Get current size */
@@ -270,14 +267,14 @@ void	*realloc(void *ptr, size_t newdatasize)
 		{
 			/* Update used space to know how much to copy next time */
 			chunk_header->size = newsize;
-			pthread_mutex_unlock(&large_mutex);
+			pthread_mutex_unlock(&g_mutex);
 			/* Unmap the unused part */
 			size_t	newavailable = PAGE_SIZE_MULTIPLE(newsize, pagesize);
 			munmap(ptr - sizeof(chunk_header_t) + newavailable, available - newavailable);
 			/* Return original pointer */
 			return (ptr);
 		}
-		pthread_mutex_unlock(&large_mutex);
+		pthread_mutex_unlock(&g_mutex);
 
 		datasize = size - sizeof(chunk_header_t);
 	}
@@ -315,7 +312,6 @@ void	*realloc(void *ptr, size_t newdatasize)
 	} \
 }
 
-#if DEV
 # define SHOW_ALLOC_LARGE(total, callback) { \
 	PUTS("\033[1;91mLarge\033[0m"); \
 	const int	pagesize = getpagesize(); \
@@ -331,13 +327,9 @@ void	*realloc(void *ptr, size_t newdatasize)
 		node = node->next; \
 	} \
 }
-#else
-# define SHOW_ALLOC_LARGE()
-#endif
 
 #define SHOW_ALLOC_MEM(callback) { \
-	pthread_mutex_lock(&chunk_mutex); \
-	pthread_mutex_lock(&large_mutex); \
+	pthread_mutex_lock(&g_mutex); \
 	PUTS("\n═════════════ \033[1;94mAllocated mem\033[0m ═════════════"); \
 	PUT("\033[1;94mTiny\033[0m : range[") PTR(tiny_data) PUT(",") PTR(tiny_data + sizeof(tiny_data)) PUTS(")"); \
 	size_t	total = 0; \
@@ -361,8 +353,7 @@ void	*realloc(void *ptr, size_t newdatasize)
 	SHOW_ALLOC_LARGE(total, callback); \
 	PUT("Total : ") ULONG(total) PUTS(" bytes"); \
 	PUTS("═════════════════════════════════════════\n"); \
-	pthread_mutex_unlock(&chunk_mutex); \
-	pthread_mutex_unlock(&large_mutex); \
+	pthread_mutex_unlock(&g_mutex); \
 }
 
 void	show_alloc_mem(void)
@@ -375,10 +366,9 @@ void	show_alloc_mem_ex(void)
 	SHOW_ALLOC_MEM(hexdump);
 }
 
-#if DEV
 void	cleanup(void)
 {
-	pthread_mutex_lock(&chunk_mutex);
+	pthread_mutex_lock(&g_mutex);
 
 	for (int chunk_idx = 0; chunk_idx < 4; ++chunk_idx)
 	{
@@ -386,23 +376,19 @@ void	cleanup(void)
 		small_used[chunk_idx] = 0;
 	}
 
-	pthread_mutex_unlock(&chunk_mutex);
-
-	pthread_mutex_lock(&large_mutex);
 	chunk_header_t	*node = first_large;
-	pthread_mutex_unlock(&large_mutex);
+	pthread_mutex_unlock(&g_mutex);
 	while (node)
 	{
-		pthread_mutex_lock(&large_mutex);
+		pthread_mutex_lock(&g_mutex);
 		chunk_header_t	*next  = node->next;
-		pthread_mutex_unlock(&large_mutex);
+		pthread_mutex_unlock(&g_mutex);
 
 		free((void *)(node + 1));
 
 		node = next;
 	}
 }
-#endif
 
 void	show_backtrace(void)
 {
