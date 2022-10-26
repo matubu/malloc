@@ -150,10 +150,6 @@ int	main()
 	test_threads();
 	show_alloc_mem();
 
-	SECTION("test cleanup");
-	cleanup();
-	show_alloc_mem();
-
 	SECTION("safe malloc");
 	void *ptr = safe_malloc(10000000000000000);
 	t_free(ptr);

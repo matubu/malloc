@@ -43,7 +43,7 @@ re: fclean all
 
 test: all
 	@echo -e "🎯 $(Green)Compiling$(Eoc) | $@"
-	@gcc $(Flag) test.c -o $@ -L. -lft_malloc
+	@gcc $(Flag) test.bak.c -o $@ -L. -lft_malloc
 	@echo -e "🖥  $(Green)Launching$(Eoc)  | $@"
 	@export LD_LIBRARY_PATH=. && ./$@
 

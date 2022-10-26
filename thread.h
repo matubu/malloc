@@ -12,7 +12,7 @@ int	rand_malloc()
 
 void	*allocate(void *i)
 {
-	printf("launch thread %d\n", (int)i);
+	printf("launch thread %lld\n", (long long)i);
 	for (int i = 0; i < 20; ++i)
 	{
 		void *ptr = malloc(rand_malloc());

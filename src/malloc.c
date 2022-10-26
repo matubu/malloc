@@ -17,7 +17,7 @@
 #define TINY_ZONE_MAX_SIZE            (TINY_ZONE_PREALLOCATE_SIZE / 400)
 
 #define SMALL_ZONE_PREALLOCATE_SIZE   (PAGE_SIZE_CONST * 8)
-#define SMALL_ZONE_MAX_SIZE           (TINY_ZONE_MAX_SIZE / 400)
+#define SMALL_ZONE_MAX_SIZE           (SMALL_ZONE_PREALLOCATE_SIZE / 200)
 
 #define MALLOC_MMAP_PROT              (PROT_READ | PROT_WRITE)
 #define MALLOC_MMAP_FLAGS             (MAP_ANON | MAP_PRIVATE)
@@ -220,7 +220,7 @@ void	*realloc(void *ptr, size_t size) {
 	}
 
 	if (allocation->next && allocation->next->used == 0
-		&& allocation->size + sizeof(Allocation) + allocation->next->size > size) {
+		&& allocation->size + sizeof(Allocation) + allocation->next->size >= size) {
 		// Merge allocation
 		// TODO Add update available left_over
 		allocation->size += allocation->next->size + sizeof(Allocation);
@@ -238,7 +238,7 @@ void	*realloc(void *ptr, size_t size) {
 	}
 	ft_memcpy(new_ptr, ptr, allocation->size);
 	free(ptr);
-	return ptr;
+	return new_ptr;
 }
 
 void	sort_mmap() {
@@ -267,27 +267,43 @@ void	sort_mmap() {
 	}
 }
 
-void	show_alloc_mem(void) {
+static void	_show_alloc_mem(int enable_hexdump) {
 	pthread_mutex_lock(&g_mutex);
 	PUTS("Alloc mem report:");
 
 	sort_mmap();
 
 	Mmap	*zone = mapped_zones;
+	size_t	total_bytes_used = 0;
 
 	while (zone) {
 		// Zone header
-		PUT("\x1b[94mZone\x1b[0m(");
+		PUT("\x1b[1;94mZone\x1b[0m(");
 		PTR(zone);
 		PUT("-");
 		PTR((void *)zone + zone->mmap_size);
-		PUTS(")");
+		PUT("), ");
+		ULONG(zone->mmap_size);
+		PUTS(" bytes");
 
 		Allocation	*allocation = zone->allocations;
 
 		while (allocation) {
 			// Allocation header
-			PUT("    \x1b[94mAllocation\x1b[0m(");
+			if (allocation->next) {
+				PUT(" ├");
+			} else {
+				PUT(" ╰");
+			}
+			PUT("─> \x1b[94m");
+			if (allocation->size <= TINY_ZONE_MAX_SIZE) {
+				PUT("Tiny");
+			} else if (allocation->size <= SMALL_ZONE_MAX_SIZE) {
+				PUT("Small");
+			} else {
+				PUT("Large");
+			}
+			PUT("Allocation\x1b[0m(");
 			PTR(allocation);
 			PUT("-");
 			PTR((void *)allocation + allocation->size + sizeof(Allocation));
@@ -298,8 +314,14 @@ void	show_alloc_mem(void) {
 			PUT(" bytes");
 			if (allocation->used == 0) {
 				PUT(" \x1b[91m(not used)\x1b[0m");
+			} else {
+				total_bytes_used += allocation->size;
 			}
 			PUTS("");
+
+			if (allocation->used == 1 && enable_hexdump) {
+				hexdump((void *)allocation + sizeof(Allocation), allocation->size);
+			}
 
 			allocation = allocation->next;
 		}
@@ -307,7 +329,18 @@ void	show_alloc_mem(void) {
 		zone = zone->next;
 	}
 
+	PUT("Total bytes used ");
+	ULONG(total_bytes_used);
+	PUTS(" bytes");
+
 	pthread_mutex_unlock(&g_mutex);
+}
+
+void	show_alloc_mem(void) {
+	_show_alloc_mem(0);
+}
+void	show_alloc_mem_ex(void) {
+	_show_alloc_mem(1);
 }
 
 // Bonus
@@ -348,5 +381,3 @@ void	*safe_malloc(size_t size) {
 	}
 	return (ptr);
 }
-
-// TODO create show_alloc_mem_ex
