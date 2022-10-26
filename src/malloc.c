@@ -4,6 +4,8 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <execinfo.h>
+#include <errno.h>
+#include <limits.h>
 
 #include "io.h"
 #include "utils.h"
@@ -239,40 +241,112 @@ void	*realloc(void *ptr, size_t size) {
 	return ptr;
 }
 
-#include <stdio.h>
+void	sort_mmap() {
+	int		swap = 1;
+
+	if (mapped_zones == NULL) {
+		return ;
+	}
+	while (swap) {
+		swap = 0;
+
+		Mmap	**prev = &mapped_zones;
+		Mmap	*node = mapped_zones->next;
+
+		while (node) {
+			if (*prev > node) {
+				swap = 1;
+				(*prev)->next = node->next;
+				node->next = *prev;
+				*prev = node;
+				break ;
+			}
+			prev = &(*prev)->next;
+			node = node->next;
+		}
+	}
+}
 
 void	show_alloc_mem(void) {
 	pthread_mutex_lock(&g_mutex);
+	PUTS("Alloc mem report:");
+
+	sort_mmap();
+
 	Mmap	*zone = mapped_zones;
 
-	printf("Zones:\n");
 	while (zone) {
-		printf(
-			"\x1b[94mZone\x1b[0m [%p-%p] (\x1b[93m%ld\x1b[0m bytes):\n",
-			zone,
-			(void *)zone + zone->mmap_size,
-			zone->mmap_size
-		);
+		// Zone header
+		PUT("\x1b[94mZone\x1b[0m(");
+		PTR(zone);
+		PUT("-");
+		PTR((void *)zone + zone->mmap_size);
+		PUTS(")");
 
 		Allocation	*allocation = zone->allocations;
 
 		while (allocation) {
-			printf(
-				"\t\x1b[94mAllocation\x1b[0m [%p-%p]:\n",
-				allocation,
-				(void *)allocation + allocation->size + sizeof(Allocation)
-			);
-			printf("\t\t.ptr: \x1b[93m%p\x1b[0m\n", (void *)allocation + sizeof(Allocation));
-			printf("\t\t.size: \x1b[93m%ld\x1b[0m\n", allocation->size);
-			printf("\t\t.used: %s\x1b[0m\n", allocation->used ? "\x1b[92mtrue" : "\x1b[91mfalse");
+			// Allocation header
+			PUT("    \x1b[94mAllocation\x1b[0m(");
+			PTR(allocation);
+			PUT("-");
+			PTR((void *)allocation + allocation->size + sizeof(Allocation));
+			PUT(") -> ")
+			PTR((void *)allocation + sizeof(Allocation));
+			PUT(", ");
+			ULONG(allocation->size);
+			PUT(" bytes");
+			if (allocation->used == 0) {
+				PUT(" \x1b[91m(not used)\x1b[0m");
+			}
+			PUTS("");
 
 			allocation = allocation->next;
 		}
 
 		zone = zone->next;
 	}
+
 	pthread_mutex_unlock(&g_mutex);
 }
 
-// TODO remove stdio
-// TODO add calloc reallocarray safe_malloc cleanup
+// Bonus
+void	*calloc(size_t nmemb, size_t size) {
+	if (nmemb == 0 || size == 0) {
+		return (void *)-1;
+	}
+	// Overflow check
+	if (nmemb > INT_MAX / size) {
+		errno = ENOMEM;
+		return (NULL);
+	}
+	char *ptr = malloc(nmemb * size);
+	for (size_t i = 0; i < size; ++i) {
+		ptr[i] = 0;
+	}
+	return (ptr);
+}
+
+void	*reallocarray(void *ptr, size_t nmemb, size_t size) {
+	if (nmemb == 0 || size == 0) {
+		return (void *)-1;
+	}
+	// Overflow check
+	if (nmemb > INT_MAX / size) {
+		errno = ENOMEM;
+		return (NULL);
+	}
+	return (realloc(ptr, nmemb * size));
+}
+
+void	*safe_malloc(size_t size) {
+	void	*ptr = malloc(size);
+
+	if (ptr == NULL) {
+		PUTS("\x1b[91mError\x1b[91m: failed to allocate memory");
+		exit(1);
+	}
+	return (ptr);
+}
+
+// TODO create show_alloc_mem_ex

@@ -31,6 +31,7 @@ int	main() {
 
 	for (int i = 0; i < 10000; i++) {
 		int		size = rand() % 1000;
+		printf("rand done\n");
 		char	*ptr = malloc(size);
 
 		printf("malloc(%d) -> %p\n", size, ptr);
@@ -43,5 +44,7 @@ int	main() {
 			free(ptr);
 		}
 	}
+	printf("before\n");
 	show_alloc_mem();
+	printf("here\n");
 }
