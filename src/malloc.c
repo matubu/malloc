@@ -44,7 +44,7 @@ typedef struct Mmap_s {
 
 
 static Mmap *mapped_zones = NULL;
-
+static pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static inline void	*malloc_search(size_t size) {
 	Mmap	*zone = mapped_zones;
@@ -134,14 +134,19 @@ void	*malloc(size_t size) {
 		return (void *)-1;
 	}
 
+	pthread_mutex_lock(&g_mutex);
+
 	if ((ptr = malloc_search(size))) {
+		pthread_mutex_unlock(&g_mutex);
 		return (ptr);
 	}
 
-	return (malloc_mmap(size));
+	ptr = malloc_mmap(size);
+	pthread_mutex_unlock(&g_mutex);
+	return (ptr);
 }
 
-int	get_allocation_info(void *ptr, Allocation **previous, Allocation **current) {
+static int	get_allocation_info(void *ptr, Allocation **previous, Allocation **current) {
 	Mmap	*zone = mapped_zones;
 
 	while (zone) {
@@ -170,7 +175,9 @@ void	free(void *ptr) {
 	Allocation	*prev_allocation;
 	Allocation	*allocation;
 
+	pthread_mutex_lock(&g_mutex);
 	if (ptr == NULL || get_allocation_info(ptr, &prev_allocation, &allocation) < 0) {
+		pthread_mutex_unlock(&g_mutex);
 		return ;
 	}
 
@@ -188,6 +195,7 @@ void	free(void *ptr) {
 		allocation->size += allocation->next->size + sizeof(Allocation);
 		allocation->next = allocation->next->next;
 	}
+	pthread_mutex_unlock(&g_mutex);
 }
 
 void	*realloc(void *ptr, size_t size) {
@@ -198,11 +206,14 @@ void	*realloc(void *ptr, size_t size) {
 		return ptr;
 	}
 
+	pthread_mutex_lock(&g_mutex);
 	if (get_allocation_info(ptr, &prev_allocation, &allocation) < 0) {
+		pthread_mutex_unlock(&g_mutex);
 		return NULL;
 	}
 
 	if (allocation->size >= size) {
+		pthread_mutex_unlock(&g_mutex);
 		return ptr;
 	}
 
@@ -212,9 +223,11 @@ void	*realloc(void *ptr, size_t size) {
 		// TODO Add update available left_over
 		allocation->size += allocation->next->size + sizeof(Allocation);
 		allocation->next = allocation->next->next;
+		pthread_mutex_unlock(&g_mutex);
 		return ptr;
 	}
 
+	pthread_mutex_unlock(&g_mutex);
 	// Allocate new memory
 	void	*new_ptr = malloc(size);
 
@@ -229,6 +242,7 @@ void	*realloc(void *ptr, size_t size) {
 #include <stdio.h>
 
 void	show_alloc_mem(void) {
+	pthread_mutex_lock(&g_mutex);
 	Mmap	*zone = mapped_zones;
 
 	printf("Zones:\n");
@@ -257,7 +271,8 @@ void	show_alloc_mem(void) {
 
 		zone = zone->next;
 	}
+	pthread_mutex_unlock(&g_mutex);
 }
 
-// TODO merge Mmap ?
-// TODO mutex
+// TODO remove stdio
+// TODO add calloc reallocarray safe_malloc cleanup
