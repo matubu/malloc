@@ -2,14 +2,6 @@
 
 #include <unistd.h>
 
-int len(const char *s)
-{
-	int l = 0;
-	while (s[l])
-		++l;
-	return (l);
-}
-
 static inline void	put_base(unsigned long long n, const char *base, int baselen)
 {
 	char	buf[19];
@@ -57,11 +49,4 @@ static inline void	hexdump(const char *ptr, size_t size)
 		}
 		PUTS("");
 	}
-}
-
-int	puts(const char *s)
-{
-	write(1, s, len(s));
-	PUTS("");
-	return 0;
 }

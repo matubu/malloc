@@ -13,10 +13,10 @@
 #define PAGE_SIZE_CONST               (8192)
 #define PAGE_SIZE                     (getpagesize())
 
-#define TINY_ZONE_PREALLOCATE_SIZE    (PAGE_SIZE_CONST * 4)
+#define TINY_ZONE_PREALLOCATE_SIZE    (PAGE_SIZE_CONST * 16)
 #define TINY_ZONE_MAX_SIZE            (TINY_ZONE_PREALLOCATE_SIZE / 400)
 
-#define SMALL_ZONE_PREALLOCATE_SIZE   (PAGE_SIZE_CONST * 8)
+#define SMALL_ZONE_PREALLOCATE_SIZE   (PAGE_SIZE_CONST * 32)
 #define SMALL_ZONE_MAX_SIZE           (SMALL_ZONE_PREALLOCATE_SIZE / 200)
 
 #define MALLOC_MMAP_PROT              (PROT_READ | PROT_WRITE)
@@ -45,8 +45,8 @@ typedef struct Mmap_s {
 }	Mmap;
 
 
-static Mmap *mapped_zones = NULL;
-static pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
+static Mmap				*mapped_zones = NULL;
+static pthread_mutex_t	g_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static inline void	*malloc_search(size_t size) {
 	Mmap	*zone = mapped_zones;
@@ -241,7 +241,7 @@ void	*realloc(void *ptr, size_t size) {
 	return new_ptr;
 }
 
-void	sort_mmap() {
+static inline void	sort_mmap() {
 	int		swap = 1;
 
 	if (mapped_zones == NULL) {
