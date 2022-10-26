@@ -20,31 +20,31 @@ Eoc = \033[0m
 all: $(Name)
 
 bin/%.o: src/%.c $(Header)
-	@echo "🔧 $(Green)Compiling$(Eoc) $(notdir $<)"
+	@echo -e "🔧 $(Green)Compiling$(Eoc) | $(notdir $<)"
 	@mkdir -p bin
 	@gcc $(Flag) -fPIC $< -o $@ -c
 
 $(Name): $(Objs)
-	@echo "📦 $(Green)Archiving$(Eoc) $(FullName)"
+	@echo -e "📦 $(Green)Archiving$(Eoc) | $(FullName)"
 	@gcc $(Flag) $^ -shared -o $(FullName)
-	@echo "🔗 $(Green)Linking$(Eoc)   $(Name) -> $(FullName)"
+	@echo -e "🔗 $(Green)Linking$(Eoc)   | $(Name) -> $(FullName)"
 	@rm -rf $(Name)
 	@ln -s $(FullName) $(Name)
 
 clean:
-	@echo "🗑  $(Red)Removing$(Eoc)  bin"
+	@echo -e "🗑  $(Red)Removing$(Eoc)  | bin"
 	@rm -rf bin
 
 fclean: clean
-	@echo "🗑  $(Red)Removing$(Eoc)  $(Name)"
+	@echo -e "🗑  $(Red)Removing$(Eoc)  | $(Name)"
 	@rm -rf $(Name) $(FullName) test
 
 re: fclean all
 
 test: all
-	@echo "🎯 $(Green)Compiling$(Eoc) $@"
+	@echo -e "🎯 $(Green)Compiling$(Eoc) | $@"
 	@gcc $(Flag) test.c -o $@ -L. -lft_malloc
-	@echo "🖥  $(Green)Launching$(Eoc) $@"
+	@echo -e "🖥  $(Green)Launching$(Eoc)  | $@"
 	@export LD_LIBRARY_PATH=. && ./$@
 
 .PHONY: all clean fclean re test

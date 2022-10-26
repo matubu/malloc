@@ -4,419 +4,266 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <execinfo.h>
+
 #include "io.h"
+#include "utils.h"
 
-// Left most unset bit
-static inline int	lmub(uint64_t bytes)
-{
-	bytes = ~bytes; // Invert bytes
-	if (bytes == 0) // Verify their is a unset bit
-		return (-1);
-	int			offset = 0;
-	uint64_t	width = 32;
+#define PAGE_SIZE_CONST 8192
+#define PAGE_SIZE getpagesize()
 
-	// Binary search
-	while (width)
-	{
-		if ((bytes & (((uint64_t)1 << width) - 1)) == 0) // Check if full
-		{
-			bytes >>= width; // Shift bytes to next half
-			offset += width; // Increment counter
+#define TINY_ZONE_MAX_SIZE      PAGE_SIZE_CONST * 2
+#define TINY_ZONE_ALLOC_SIZE    PAGE_SIZE_CONST * 4
+
+#define SMALL_ZONE_MAX_SIZE     PAGE_SIZE_CONST * 4
+#define SMALL_ZONE_ALLOC_SIZE   PAGE_SIZE_CONST * 8
+
+#define MALLOC_MMAP_PROT        PROT_READ | PROT_WRITE
+#define MALLOC_MMAP_FLAGS       MAP_ANON | MAP_PRIVATE
+
+typedef enum {
+	TinyAllocation = 0,
+	SmallAllocation = 1,
+	LargeAllocation = 2
+}	AllocationType;
+
+// This structure is followed by {size} bytes
+// which are linked to this allocation
+typedef struct Allocation_s {
+	// The pointer to the next allocation
+	struct Allocation_s		*next;
+	// Size of this allocation (without including this header)
+	size_t					size;
+	// Is this allocation used
+	uint8_t					used;
+}	Allocation;
+
+typedef struct Mmap_s {
+	// The pointer to the next memory map
+	struct Mmap_s	*next;
+	// Maximum contiguous space aka largest zone available inside
+	// uint64_t		max_contiguous;
+	// Size of this memory map (include this header)
+	size_t			mmap_size;
+	// Pointer to the first allocation in this memory map
+	Allocation		*allocations;
+}	Mmap;
+
+
+static Mmap *mapped_zones = NULL;
+
+
+static inline void	*malloc_search(size_t size) {
+	Mmap	*zone = mapped_zones;
+
+	while (zone) {
+		Allocation	*allocation = zone->allocations;
+
+		while (allocation) {
+			if (allocation->used == 0 && allocation->size >= size) {
+				Allocation	*left_over = allocation->next;
+
+				if (allocation->size > size + sizeof(Allocation)) {
+					left_over = (void *)allocation + sizeof(Allocation) + size;
+
+					left_over->next = allocation->next;
+					left_over->size = allocation->size - (size + sizeof(Allocation));
+					left_over->used = 0;
+				}
+
+				allocation->next = left_over;
+				allocation->size = size;
+				allocation->used = 1;
+
+				return (void *)allocation + sizeof(Allocation);
+			}
+
+			allocation = allocation->next;
 		}
-		width >>= 1; // Divide by two
+		
+		zone = zone->next;
 	}
 
-	return (offset);
+	return NULL;
 }
 
-// Zones
-// total stack memory preallocated 74_304 bytes
 
-// - Tiny [0-32] bytes (suitable for chained list)
-// tiny stack memory 8_480 bytes
-#define TINY_STORAGE 32
-uint64_t	tiny_used[4] = {0};  // to keep track of used block
-uint8_t		tiny_size[256];      // size of every memory address
-uint8_t		tiny_data[256][TINY_STORAGE];  // actual data/pointer 
-#define IS_TINY_MEMORY_ADDRESS(addr) (addr >= (void *)tiny_data \
-		&& addr < (void *)tiny_data + sizeof(tiny_data))
-#define GET_TINY_MEMORY_ADDRESS_INDEX(addr) ((addr - (void *)tiny_data) / TINY_STORAGE)
+static inline void	*malloc_mmap(size_t size) {
+	size_t		alloc_size;
 
-
-// - Small [33-128] bytes (suitable for small length string)
-// small stack memory 65_824 bytes
-#define SMALL_STORAGE 128
-uint64_t	small_used[4] = {0};
-uint8_t		small_size[256];
-uint8_t		small_data[256][SMALL_STORAGE];
-#define IS_SMALL_MEMORY_ADDRESS(addr) (addr >= (void *)small_data \
-		&& addr < (void *)small_data + sizeof(small_data))
-#define GET_SMALL_MEMORY_ADDRESS_INDEX(addr) ((addr - (void *)small_data) / SMALL_STORAGE)
-
-// - Large [257-∞] bytes (suitable for big buffer allocation)
-// 24 byte
-// | [8 bytes] header | data |
-// | containing size  |      |
-typedef struct chunk_header_s {
-	size_t			size;
-	struct chunk_header_s	*next;
-	struct chunk_header_s	**prev; // point on use
-}	chunk_header_t;
-
-chunk_header_t	*first_large = NULL;
-
-int	is_large_memory_address(chunk_header_t *ptr)
-{
-	chunk_header_t	*node = first_large;
-
-	--ptr; // Go to header location
-	while (node)
-	{
-		if (node == ptr)
-			return (1);
-		node = node->next;
+	if (size < TINY_ZONE_MAX_SIZE) {
+		alloc_size = TINY_ZONE_ALLOC_SIZE;
 	}
-	return (0);
-}
-
-pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
-
-/* Get the rounded up multiple of the page size */
-#define PAGE_SIZE_MULTIPLE(size, pagesize) ((size + pagesize - 1) & ~(pagesize - 1))
-
-static inline void	*malloc_chunk(
-	uint64_t *chunk_used,
-	uint8_t *chunk_size,
-	int storage,
-	uint8_t chunk_data[256][storage],
-	size_t size
-)
-{
-	int	chunk_id = 0;
-	int	idx;
-
-	pthread_mutex_lock(&g_mutex);
-	while ((idx = lmub(chunk_used[chunk_id])) == -1)
-	{
-		if (++chunk_id >= 4)
-		{
-			pthread_mutex_unlock(&g_mutex);
-			return (NULL);
-		}
-
+	else if (size < SMALL_ZONE_MAX_SIZE) {
+		alloc_size = SMALL_ZONE_ALLOC_SIZE;
 	}
-	chunk_used[chunk_id] |= 1 << idx; // Update to used
-	idx += chunk_id * 64;
-	chunk_size[idx] = size;           // Update size for realloc
-	void	*addr = chunk_data[idx];
-	pthread_mutex_unlock(&g_mutex);
-	return (addr);                    // Return data address
+	else {
+		alloc_size = align_up(sizeof(Mmap) + sizeof(Allocation) + size);
+	}
+
+	Mmap	*memory_map
+		= mmap(0, alloc_size, MALLOC_MMAP_PROT, MALLOC_MMAP_FLAGS, -1, 0);
+	if (memory_map == MAP_FAILED) {
+		return NULL;
+	}
+
+	Allocation	*allocation = (void *)memory_map + sizeof(Mmap);
+	allocation->size = size;
+	allocation->used = 1;
+
+	Allocation	*left_over = NULL;
+
+	size_t	used = sizeof(Mmap) + sizeof(Allocation) + size;
+	if (alloc_size > used + sizeof(Allocation)) {
+		left_over = (void *)memory_map + used;
+
+		left_over->next = NULL;
+		left_over->size = alloc_size - (used + sizeof(Allocation));
+		left_over->used = 0;
+	}
+
+	allocation->next = left_over;
+
+	memory_map->next = mapped_zones;
+	memory_map->mmap_size = alloc_size;
+	memory_map->allocations = allocation;
+
+	mapped_zones = memory_map;
+
+	return (void *)allocation + sizeof(Allocation);
 }
 
-static inline void	*malloc_large(size_t size)
-{
-	/* Add the header size */
-	size += sizeof(chunk_header_t); // TODO fix overflow bug
 
-	chunk_header_t	*ptr = mmap(0, size, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
-	if (ptr == MAP_FAILED)
-		return (NULL);
-	ptr->size = size;
-	pthread_mutex_lock(&g_mutex);
-	// Push front
-	ptr->next = first_large;
-	ptr->prev = &first_large;
-	if (first_large)
-		first_large->prev = &ptr->next;
-	first_large = ptr;
-	pthread_mutex_unlock(&g_mutex);
-	return ((void *)(ptr + 1));
-}
-
-void	*malloc(size_t size)
-{
+void	*malloc(size_t size) {
 	void	*ptr;
 
-	if (size == 0)
-		return ((void *)-1);
+	if (size == 0) {
+		return (void *)-1;
+	}
 
-	if (size <= TINY_STORAGE && (ptr = malloc_chunk(
-		tiny_used,
-		tiny_size,
-		TINY_STORAGE,
-		tiny_data,
-		size
-	)))
+	if ((ptr = malloc_search(size))) {
 		return (ptr);
-	
+	}
 
-	if (size <= SMALL_STORAGE && (ptr = malloc_chunk(
-		small_used,
-		small_size,
-		SMALL_STORAGE,
-		small_data,
-		size
-	)))
-		return (ptr);
-
-	return (malloc_large(size));
+	return (malloc_mmap(size));
 }
 
-void	free(void *ptr)
-{
-	if (ptr == NULL || ptr == (void *)-1)
-		return ;
+int	get_allocation_info(void *ptr, Allocation **previous, Allocation **current) {
+	Mmap	*zone = mapped_zones;
 
-	if (IS_TINY_MEMORY_ADDRESS(ptr))
-	{
-		int idx = GET_TINY_MEMORY_ADDRESS_INDEX(ptr);
-		pthread_mutex_lock(&g_mutex);
-		tiny_used[idx / 64] &= ~(1 << (idx & 63));
-		pthread_mutex_unlock(&g_mutex);
-		return ;
+	while (zone) {
+		if (ptr < (void*)zone || ptr >= (void*)zone + zone->mmap_size) {
+			zone = zone->next;
+			continue ;
+		}
+
+		*previous = NULL;
+		*current = zone->allocations;
+
+		while (*current) {
+			if ((void *)*current + sizeof(Allocation) == ptr) {
+				return 0;
+			}
+
+			*previous = *current;
+			*current = (*current)->next;
+		}
+		return -1;
 	}
-
-	if (IS_SMALL_MEMORY_ADDRESS(ptr))
-	{
-		int idx = GET_SMALL_MEMORY_ADDRESS_INDEX(ptr);
-		pthread_mutex_lock(&g_mutex);
-		small_used[idx / 64] &= ~(1 << (idx & 63));
-		pthread_mutex_unlock(&g_mutex);
-		return ;
-	}
-
-	pthread_mutex_lock(&g_mutex);
-
-	if (!is_large_memory_address(ptr))
-	{
-		pthread_mutex_unlock(&g_mutex);
-		return ;
-	}
-
-	/* Move to allocation start */
-	chunk_header_t	*chunk_header = (chunk_header_t *)ptr - 1;
-
-	if (chunk_header->next)
-		chunk_header->next->prev = chunk_header->prev;
-	*chunk_header->prev = chunk_header->next;
-	pthread_mutex_unlock(&g_mutex);
-
-	/* Get allocation size */
-	size_t	size = chunk_header->size;
-	munmap(chunk_header, size);
+	return -1;
 }
 
-void	*realloc(void *ptr, size_t newdatasize)
-{
-	if (ptr == NULL || ptr == (void *)-1)
-		return (malloc(newdatasize));
+void	free(void *ptr) {
+	Allocation	*prev_allocation;
+	Allocation	*allocation;
 
-	size_t	datasize = 0;
-	if (IS_TINY_MEMORY_ADDRESS(ptr))
-	{
-		int idx = GET_TINY_MEMORY_ADDRESS_INDEX(ptr);
-		pthread_mutex_lock(&g_mutex);
-		if (newdatasize <= TINY_STORAGE)
-		{
-			/* Update used space */
-			tiny_size[idx] = newdatasize;
-			/* Return original pointer */
-			pthread_mutex_unlock(&g_mutex);
-			return (ptr);
-		}
-		datasize = tiny_size[idx];
-		pthread_mutex_unlock(&g_mutex);
-	}
-	else if (IS_SMALL_MEMORY_ADDRESS(ptr))
-	{
-		int idx = GET_SMALL_MEMORY_ADDRESS_INDEX(ptr);
-		pthread_mutex_lock(&g_mutex);
-		if (newdatasize <= SMALL_STORAGE)
-		{
-			/* Update used space */
-			small_size[idx] = newdatasize;
-			/* Return original pointer */
-			pthread_mutex_unlock(&g_mutex);
-			return (ptr);
-		}
-		datasize = small_size[idx];
-		pthread_mutex_unlock(&g_mutex);
-	}
-	else
-	{
-		pthread_mutex_lock(&g_mutex);
-		if (!is_large_memory_address(ptr))
-		{
-			pthread_mutex_unlock(&g_mutex);
-			PUTS("not mine");
-			return (NULL);
-		}
-
-		chunk_header_t	*chunk_header = (chunk_header_t *)ptr - 1;
-
-		/* Get current size */
-		size_t	size = chunk_header->size;
-		/* Calculate new size */
-		size_t	newsize = newdatasize + sizeof(chunk_header_t);
-
-		/* Check available space */
-		const int	pagesize = getpagesize();
-		size_t		available = PAGE_SIZE_MULTIPLE(size, pagesize);
-
-		if (available >= newsize)
-		{
-			/* Update used space to know how much to copy next time */
-			chunk_header->size = newsize;
-			pthread_mutex_unlock(&g_mutex);
-			/* Unmap the unused part */
-			size_t	newavailable = PAGE_SIZE_MULTIPLE(newsize, pagesize);
-			munmap(ptr - sizeof(chunk_header_t) + newavailable, available - newavailable);
-			/* Return original pointer */
-			return (ptr);
-		}
-		pthread_mutex_unlock(&g_mutex);
-
-		datasize = size - sizeof(chunk_header_t);
+	if (ptr == NULL || get_allocation_info(ptr, &prev_allocation, &allocation) < 0) {
+		return ;
 	}
 
-	void	*newptr = malloc(newdatasize);
-	
-	if (newptr == NULL)
-		return (NULL);
+	allocation->used = 0;
 
-	/* Copy memory */
-	for (size_t i = 0; i < datasize; ++i)
-		((char *)newptr)[i] = ((char *)ptr)[i];
+	// Merge with previous
+	if (prev_allocation && prev_allocation->used == 0) {
+		prev_allocation->size += sizeof(Allocation) + allocation->size;
+		prev_allocation->next = allocation->next;
+		allocation = prev_allocation;
+	}
 
-	/* Free old pointer */
+	// Merge with next
+	if (allocation->next && allocation->next->used == 0) {
+		allocation->size += allocation->next->size + sizeof(Allocation);
+		allocation->next = allocation->next->next;
+	}
+}
+
+void	*realloc(void *ptr, size_t size) {
+	Allocation	*prev_allocation;
+	Allocation	*allocation;
+
+	if (size == 0) {
+		return ptr;
+	}
+
+	if (get_allocation_info(ptr, &prev_allocation, &allocation) < 0) {
+		return NULL;
+	}
+
+	if (allocation->size >= size) {
+		return ptr;
+	}
+
+	if (allocation->next && allocation->next->used == 0
+		&& allocation->size + sizeof(Allocation) + allocation->next->size > size) {
+		// Merge allocation
+		// TODO Add update available left_over
+		allocation->size += allocation->next->size + sizeof(Allocation);
+		allocation->next = allocation->next->next;
+		return ptr;
+	}
+
+	// Allocate new memory
+	void	*new_ptr = malloc(size);
+
+	if (new_ptr == NULL) {
+		return NULL;
+	}
+	ft_memcpy(new_ptr, ptr, allocation->size);
 	free(ptr);
-
-	return (newptr);
+	return ptr;
 }
 
-#define SHOW_ALLOC_CHUNK(used, size, storage, data, total, callback) { \
-	for (int chunk_idx = 0; chunk_idx < 4; ++chunk_idx) \
-	{ \
-		for (int idx = 0; idx < 64; ++idx) \
-		{ \
-			if (used[chunk_idx] & ((uint64_t)1 << idx)) \
-			{ \
-				PUT("[") PTR(&data[chunk_idx * 64 + idx]) PUT(", ") \
-				PTR(&data[chunk_idx * 64 + idx + 1]) PUT("): ") \
-				ULONG(size[chunk_idx * 64 + idx]) PUT(" bytes (real ") \
-				ULONG(storage) PUTS(" bytes)"); \
-				total += size[chunk_idx * 64 + idx]; \
-				callback((char *)(&data[chunk_idx * 64 + idx]), size[chunk_idx * 64 + idx]); \
-			} \
-		} \
-	} \
-}
+#include <stdio.h>
 
-# define SHOW_ALLOC_LARGE(total, callback) { \
-	PUTS("\033[1;91mLarge\033[0m"); \
-	const int	pagesize = getpagesize(); \
-	chunk_header_t	*node = first_large; \
-	while (node) \
-	{ \
-		PUT("[") PTR((void *)node + sizeof(chunk_header_t)) PUT(", ") \
-		PTR(node + PAGE_SIZE_MULTIPLE(node->size, pagesize)) PUT("): ") \
-		ULONG(node->size - sizeof(chunk_header_t)) PUT(" bytes (real ") \
-		ULONG(PAGE_SIZE_MULTIPLE(node->size, pagesize)) PUTS(" bytes)"); \
-		callback((char *)(node + 1), node->size - sizeof(chunk_header_t)); \
-		total += node->size - sizeof(chunk_header_t); \
-		node = node->next; \
-	} \
-}
+void	show_alloc_mem(void) {
+	Mmap	*zone = mapped_zones;
 
-#define SHOW_ALLOC_MEM(callback) { \
-	pthread_mutex_lock(&g_mutex); \
-	PUTS("\n═════════════ \033[1;94mAllocated mem\033[0m ═════════════"); \
-	PUT("\033[1;94mTiny\033[0m : range[") PTR(tiny_data) PUT(",") PTR(tiny_data + sizeof(tiny_data)) PUTS(")"); \
-	size_t	total = 0; \
-	SHOW_ALLOC_CHUNK( \
-		tiny_used, \
-		tiny_size, \
-		TINY_STORAGE, \
-		tiny_data, \
-		total, \
-		callback \
-	); \
-	PUT("\033[1;92mSmall\033[0m : range[") PTR(small_data) PUT(", ") PTR(small_data + sizeof(small_data)) PUTS(")"); \
-	SHOW_ALLOC_CHUNK( \
-		small_used, \
-		small_size, \
-		SMALL_STORAGE, \
-		small_data, \
-		total, \
-		callback \
-	); \
-	SHOW_ALLOC_LARGE(total, callback); \
-	PUT("Total : ") ULONG(total) PUTS(" bytes"); \
-	PUTS("═════════════════════════════════════════\n"); \
-	pthread_mutex_unlock(&g_mutex); \
-}
+	printf("Zones:\n");
+	while (zone) {
+		printf(
+			"\x1b[94mZone\x1b[0m [%p-%p] (\x1b[93m%ld\x1b[0m bytes):\n",
+			zone,
+			(void *)zone + zone->mmap_size,
+			zone->mmap_size
+		);
 
-void	show_alloc_mem(void)
-{
-	SHOW_ALLOC_MEM();
-}
+		Allocation	*allocation = zone->allocations;
 
-void	show_alloc_mem_ex(void)
-{
-	SHOW_ALLOC_MEM(hexdump);
-}
+		while (allocation) {
+			printf(
+				"\t\x1b[94mAllocation\x1b[0m [%p-%p]:\n",
+				allocation,
+				(void *)allocation + allocation->size + sizeof(Allocation)
+			);
+			printf("\t\t.ptr: \x1b[93m%p\x1b[0m\n", (void *)allocation + sizeof(Allocation));
+			printf("\t\t.size: \x1b[93m%ld\x1b[0m\n", allocation->size);
+			printf("\t\t.used: %s\x1b[0m\n", allocation->used ? "\x1b[92mtrue" : "\x1b[91mfalse");
 
-void	cleanup(void)
-{
-	pthread_mutex_lock(&g_mutex);
+			allocation = allocation->next;
+		}
 
-	for (int chunk_idx = 0; chunk_idx < 4; ++chunk_idx)
-	{
-		tiny_used[chunk_idx] = 0;
-		small_used[chunk_idx] = 0;
-	}
-
-	chunk_header_t	*node = first_large;
-	pthread_mutex_unlock(&g_mutex);
-	while (node)
-	{
-		pthread_mutex_lock(&g_mutex);
-		chunk_header_t	*next  = node->next;
-		pthread_mutex_unlock(&g_mutex);
-
-		free((void *)(node + 1));
-
-		node = next;
+		zone = zone->next;
 	}
 }
 
-void	show_backtrace(void)
-{
-	void	*array[64];
-	char	**strings;
-	int		size, i;
-
-	size = backtrace(array, 64);
-	strings = backtrace_symbols(array, size);
-	if (strings == NULL)
-	{
-		PUTS("\033[91mError\033[0m cannot load backtrace");
-		return ;
-	}
-	PUTS("\nBacktrace:");
-	for (i = 0; i < size; i++)
-		puts(strings[i]);
-}
-
-void	*safe_malloc(size_t size)
-{
-	void	*ptr = malloc(size);
-	if (ptr == NULL)
-	{
-		cleanup();
-		PUT("\033[91mError\033[0m cannot allocate ") ULONG(size) PUTS(" bytes");
-		show_backtrace();
-		exit(1);
-	}
-	return (ptr);
-}
+// TODO merge Mmap ?
+// TODO preallocate

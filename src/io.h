@@ -2,7 +2,7 @@
 
 #include <unistd.h>
 
-int len(char *s)
+int len(const char *s)
 {
 	int l = 0;
 	while (s[l])
@@ -42,7 +42,7 @@ static inline void	put_hex_pad(unsigned long long n, int pad)
 #define PTR(ptr) PUT("\033[93m0x") PUT_BASE((unsigned long long)ptr, "0123456789abcdef") PUT("\033[0m");
 #define ULONG(n) PUT("\033[93m") PUT_BASE(n, "0123456789") PUT("\033[0m");
 
-static inline void	hexdump(char *ptr, size_t size)
+static inline void	hexdump(const char *ptr, size_t size)
 {
 	while (size)
 	{
@@ -59,8 +59,9 @@ static inline void	hexdump(char *ptr, size_t size)
 	}
 }
 
-void	puts(char *s)
+int	puts(const char *s)
 {
 	write(1, s, len(s));
 	PUTS("");
+	return 0;
 }
