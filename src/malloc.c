@@ -8,23 +8,19 @@
 #include "io.h"
 #include "utils.h"
 
-#define PAGE_SIZE_CONST 8192
-#define PAGE_SIZE getpagesize()
+#define PAGE_SIZE_CONST         (8192)
+#define PAGE_SIZE               (getpagesize())
 
-#define TINY_ZONE_MAX_SIZE      PAGE_SIZE_CONST * 2
-#define TINY_ZONE_ALLOC_SIZE    PAGE_SIZE_CONST * 4
+#define PREALLOCATE_SIZE        (PAGE_SIZE_CONST * 16)
 
-#define SMALL_ZONE_MAX_SIZE     PAGE_SIZE_CONST * 4
-#define SMALL_ZONE_ALLOC_SIZE   PAGE_SIZE_CONST * 8
+#define TINY_ZONE_MAX_SIZE      (PAGE_SIZE_CONST * 2)
+#define TINY_ZONE_ALLOC_SIZE    (PAGE_SIZE_CONST * 4)
 
-#define MALLOC_MMAP_PROT        PROT_READ | PROT_WRITE
-#define MALLOC_MMAP_FLAGS       MAP_ANON | MAP_PRIVATE
+#define SMALL_ZONE_MAX_SIZE     (PAGE_SIZE_CONST * 4)
+#define SMALL_ZONE_ALLOC_SIZE   (PAGE_SIZE_CONST * 8)
 
-typedef enum {
-	TinyAllocation = 0,
-	SmallAllocation = 1,
-	LargeAllocation = 2
-}	AllocationType;
+#define MALLOC_MMAP_PROT        (PROT_READ | PROT_WRITE)
+#define MALLOC_MMAP_FLAGS       (MAP_ANON | MAP_PRIVATE)
 
 // This structure is followed by {size} bytes
 // which are linked to this allocation
@@ -90,10 +86,14 @@ static inline void	*malloc_search(size_t size) {
 static inline void	*malloc_mmap(size_t size) {
 	size_t		alloc_size;
 
-	if (size < TINY_ZONE_MAX_SIZE) {
+	if (mapped_zones == NULL
+		&& sizeof(Mmap) + sizeof(Allocation) + size <= PREALLOCATE_SIZE) {
+		alloc_size = PREALLOCATE_SIZE;
+	}
+	else if (size <= TINY_ZONE_MAX_SIZE) {
 		alloc_size = TINY_ZONE_ALLOC_SIZE;
 	}
-	else if (size < SMALL_ZONE_MAX_SIZE) {
+	else if (size <= SMALL_ZONE_MAX_SIZE) {
 		alloc_size = SMALL_ZONE_ALLOC_SIZE;
 	}
 	else {
