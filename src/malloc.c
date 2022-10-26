@@ -59,6 +59,7 @@ static inline void	*malloc_search(size_t size) {
 				Allocation	*left_over = allocation->next;
 
 				if (allocation->size > size + sizeof(Allocation)) {
+					// TODO merge with next empty alloc
 					left_over = (void *)allocation + sizeof(Allocation) + size;
 
 					left_over->next = allocation->next;
@@ -354,6 +355,9 @@ void	*calloc(size_t nmemb, size_t size) {
 		return (NULL);
 	}
 	char *ptr = malloc(nmemb * size);
+	if (ptr == NULL) {
+		return (NULL);
+	}
 	for (size_t i = 0; i < size; ++i) {
 		ptr[i] = 0;
 	}
