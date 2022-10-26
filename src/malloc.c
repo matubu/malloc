@@ -211,7 +211,7 @@ void	*realloc(void *ptr, size_t size) {
 	pthread_mutex_lock(&g_mutex);
 	if (get_allocation_info(ptr, &prev_allocation, &allocation) < 0) {
 		pthread_mutex_unlock(&g_mutex);
-		return NULL;
+		return malloc(size);
 	}
 
 	if (allocation->size >= size) {
